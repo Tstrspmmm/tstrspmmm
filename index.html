@@ -27,7 +27,7 @@
       left: 0;
       width: 100%;
       height: 100%;
-      backdrop-filter: blur(8px) brightness(0.8);
+      backdrop-filter: brightness(0.8); /* Blur removed */
       pointer-events: none;
     }
     .ui {
@@ -120,6 +120,11 @@
     let dataLog = [];
     let ocrInProgress = false;
 
+    let zeroStreak = [];
+    let autoStarted = false;
+    const zeroThreshold = 5; // consecutive zeros to assume "ready"
+    const zeroWeightMargin = 0.5;
+
     function toggleView(view) {
       document.getElementById('log').classList.remove('active');
       document.getElementById('graph').classList.remove('active');
@@ -189,7 +194,7 @@
     }
 
     async function captureAndRead() {
-      if (ocrInProgress) return;
+      if (ocrInProgress || video.readyState < 2) return;
       ocrInProgress = true;
       try {
         const w = canvas.width = video.videoWidth;
@@ -220,17 +225,32 @@
 
         const text = result.data.text.replace(/[^0-9.]/g, '').trim();
         const weight = parseFloat(text);
-        if (!isNaN(weight)) logWeight(weight);
+
+        if (!isNaN(weight)) {
+          if (!autoStarted) {
+            if (weight <= zeroWeightMargin) {
+              zeroStreak.push(Date.now());
+              if (zeroStreak.length > zeroThreshold) {
+                zeroStreak.shift();
+              }
+            } else if (zeroStreak.length >= zeroThreshold) {
+              autoStarted = true;
+              dataLog = [];
+              logEl.innerText += `\n--- Auto Start ---`;
+              logWeight(weight);
+            }
+          } else {
+            logWeight(weight);
+          }
+        }
+
       } catch (e) {
         console.error('OCR Error:', e);
       }
       ocrInProgress = false;
     }
 
-    setInterval(() => {
-      if (video.readyState >= 2) captureAndRead();
-    }, 500);
-
+    setInterval(captureAndRead, 300);
     startCamera();
   </script>
 </body>
