@@ -79,37 +79,63 @@
         video.srcObject = stream;
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
-        // Start auto-capture every 2 seconds
-        autoCaptureInterval = setInterval(captureImage, 2000);
+        // Start auto-capture every 3 seconds
+        autoCaptureInterval = setInterval(captureImage, 3000);
       } catch (err) {
         debugText.textContent = 'Camera error: ' + err.message;
       }
     }
 
-    // Capture and process image (simulated weight)
+    // Capture and process image
     async function captureImage() {
       try {
-        const weight = 150; // Simulated weight
-        debugText.textContent = 'Simulated weight: 150';
-        const currentTime = Date.now();
-        const timeDiff = (currentTime - lastTime) / 1000;
-        const weightDiff = weight - lastWeight;
-        const pourRate = timeDiff > 0 ? (weightDiff / timeDiff).toFixed(2) : 0;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        weightDisplay.textContent = weight;
-        rateDisplay.textContent = pourRate;
+        // Preprocess: Convert to grayscale and apply adaptive thresholding
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          // Adaptive threshold: adjust for LCD/LED displays
+          const threshold = avg > 80 ? 255 : 0; // Lowered for faint displays
+          data[i] = data[i + 1] = data[i + 2] = threshold;
+        }
+        ctx.putImageData(imageData, 0, 0);
 
-        const reading = {
-          time: new Date().toLocaleTimeString(),
-          weight: weight,
-          rate: pourRate
-        };
-        readings.push(reading);
-        localStorage.setItem('scaleReadings', JSON.stringify(readings));
-        loadReadings();
+        debugText.textContent = 'Processing image...';
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+          tessedit_char_whitelist: '0123456789.g',
+          tessedit_pageseg_mode: 10 // Sparse text for scale displays
+        });
+        debugText.textContent = `OCR Output: "${text}"`;
 
-        lastWeight = weight;
-        lastTime = currentTime;
+        const weightMatch = text.match(/\d+(\.\d+)?/);
+        if (weightMatch) {
+          const weight = parseFloat(weightMatch[0]);
+          const currentTime = Date.now();
+          const timeDiff = (currentTime - lastTime) / 1000;
+          const weightDiff = weight - lastWeight;
+          const pourRate = timeDiff > 0 ? (weightDiff / timeDiff).toFixed(2) : 0;
+
+          weightDisplay.textContent = weight;
+          rateDisplay.textContent = pourRate;
+
+          const reading = {
+            time: new Date().toLocaleTimeString(),
+            weight: weight,
+            rate: pourRate
+          };
+          readings.push(reading);
+          localStorage.setItem('scaleReadings', JSON.stringify(readings));
+          loadReadings();
+
+          lastWeight = weight;
+          lastTime = currentTime;
+        } else {
+          debugText.textContent = `No valid number found in "${text}"`;
+        }
       } catch (err) {
         debugText.textContent = 'Error: ' + err.message;
       }
