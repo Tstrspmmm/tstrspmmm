@@ -1,0 +1,180 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scale Reader App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/tesseract.js@4.0.9/dist/tesseract.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+  <div class="container mx-auto p-4 max-w-md">
+    <h1 class="text-2xl font-bold text-center mb-4">Scale Reader App</h1>
+    <p class="text-center text-gray-600 mb-4">Point your iPhone camera at your kitchen scale to log weight readings.</p>
+
+    <div class="mb-4">
+      <video id="video" class="w-full rounded-lg shadow-md" autoplay playsinline></video>
+      <canvas id="canvas" class="hidden"></canvas>
+    </div>
+
+    <div class="flex justify-center space-x-4 mb-4">
+      <button id="startBtn" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Start Camera</button>
+      <button id="captureBtn" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 hidden">Capture Reading</button>
+    </div>
+
+    <div id="currentReading" class="text-center text-lg font-semibold mb-4">
+      Current Weight: <span id="weight">0</span> g
+    </div>
+
+    <div id="pourRate" class="text-center text-md text-gray-700 mb-4">
+      Pour Rate: <span id="rate">0</span> g/s
+    </div>
+
+    <div class="bg-white p-4 rounded-lg shadow-md">
+      <h2 class="text-lg font-bold mb-2">Log</h2>
+      <ul id="logList" class="text-sm text-gray-600 max-h-40 overflow-y-auto"></ul>
+      <button id="clearLogBtn" class="mt-2 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full">Clear Log</button>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const weightDisplay = document.getElementById('weight');
+    const rateDisplay = document.getElementById('rate');
+    const logList = document.getElementById('logList');
+    const clearLogBtn = document.getElementById('clearLogBtn');
+
+    let stream = null;
+    let lastWeight = 0;
+    let lastTime = Date.now();
+    let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
+
+    // Load saved readings
+    function loadReadings() {
+      logList.innerHTML = '';
+      readings.forEach(reading => {
+        const li = document.createElement('li');
+        li.textContent = `${reading.time}: ${reading.weight} g (Rate: ${reading.rate} g/s)`;
+        logList.appendChild(li);
+      });
+    }
+    loadReadings();
+
+    // Start camera
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        video.srcObject = stream;
+        startBtn.classList.add('hidden');
+        captureBtn.classList.remove('hidden');
+      } catch (err) {
+        alert('Error accessing camera: ' + err.message);
+      }
+    }
+
+    // Capture and process image
+    async function captureImage() {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Use Tesseract to recognize text
+      const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+        tessedit_char_whitelist: '0123456789.'
+      });
+
+      // Extract number (assuming weight in grams)
+      const weightMatch = text.match(/\d+(\.\d+)?/);
+      if (weightMatch) {
+        const weight = parseFloat(weightMatch[0]);
+        const currentTime = Date.now();
+        const timeDiff = (currentTime - lastTime) / 1000; // seconds
+        const weightDiff = weight - lastWeight;
+        const pourRate = timeDiff > 0 ? (weightDiff / timeDiff).toFixed(2) : 0;
+
+        // Update display
+        weightDisplay.textContent = weight;
+        rateDisplay.textContent = pourRate;
+
+        // Log reading
+        const reading = {
+          time: new Date().toLocaleTimeString(),
+          weight: weight,
+          rate: pourRate
+        };
+        readings.push(reading);
+        localStorage.setItem('scaleReadings', JSON.stringify(readings));
+        loadReadings();
+
+        // Update last values
+        lastWeight = weight;
+        lastTime = currentTime;
+      }
+    }
+
+    // Clear log
+    function clearLog() {
+      readings = [];
+      localStorage.setItem('scaleReadings', JSON.stringify(readings));
+      loadReadings();
+    }
+
+    // Event listeners
+    startBtn.addEventListener('click', startCamera);
+    captureBtn.addEventListener('click', captureImage);
+    clearLogBtn.addEventListener('click', clearLog);
+
+    // Stop stream when page unloads
+    window.addEventListener('beforeunload', () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    });
+  </script>
+</body>
+</html>
