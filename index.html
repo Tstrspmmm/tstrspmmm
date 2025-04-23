@@ -66,19 +66,88 @@
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
 
-    // 7-segment digit patterns (1 = segment on, 0 = segment off)
-    // Order: top, top-left, top-right, middle, bottom-left, bottom-right, bottom
-    const segmentPatterns = {
-      '0': [1, 1, 1, 0, 1, 1, 1],
-      '1': [0, 0, 1, 0, 0, 1, 0],
-      '2': [1, 0, 1, 1, 1, 0, 1],
-      '3': [1, 0, 1, 1, 0, 1, 1],
-      '4': [0, 1, 1, 1, 0, 1, 0],
-      '5': [1, 1, 0, 1, 0, 1, 1],
-      '6': [1, 1, 0, 1, 1, 1, 1],
-      '7': [1, 0, 1, 0, 0, 1, 0],
-      '8': [1, 1, 1, 1, 1, 1, 1],
-      '9': [1, 1, 1, 1, 0, 1, 1]
+    // 7-segment digit templates (simplified binary images, 16x24 pixels)
+    const digitTemplates = {
+      '0': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,1,1,0,0,0,0,0,0,1,1,0,
+        1,1,0,0,0,0,0,0,0,0,1,1,
+        1,1,0,0,0,0,0,0,0,0,1,1,
+        0,1,1,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '1': [
+        0,0,0,0,0,1,1,0,0,0,0,0,
+        0,0,0,0,0,1,1,0,0,0,0,0,
+        0,0,0,0,0,1,1,0,0,0,0,0,
+        0,0,0,0,0,1,1,0,0,0,0,0,
+        0,0,0,0,0,1,1,0,0,0,0,0,
+        0,0,0,0,0,1,1,0,0,0,0,0
+      ],
+      '2': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '3': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '4': [
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0
+      ],
+      '5': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '6': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '7': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0
+      ],
+      '8': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ],
+      '9': [
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,0,0,0,0,0,0,0,1,1,0,
+        0,0,1,1,1,1,1,1,1,1,0,0
+      ]
     };
 
     // Load saved readings
@@ -202,13 +271,13 @@
 
         // Digit segmentation (3-4 digits, exclude top-right "g")
         const digitRegions = [];
-        const regionWidth = Math.floor(canvas.width / 5); // Adjusted for 3-4 digits
+        const regionWidth = Math.floor(canvas.width / 5);
         const regionHeight = Math.floor(canvas.height / 2);
-        const startX = Math.floor(canvas.width / 8); // Shift left to avoid top-right "g"
+        const startX = Math.floor(canvas.width / 8); // Shift left
         const startY = Math.floor(canvas.height / 4);
         for (let i = 0; i < 4; i++) {
           const regionX = startX + i * regionWidth;
-          if (regionX + regionWidth < canvas.width * 0.75) { // Avoid right 25% of display
+          if (regionX + regionWidth < canvas.width * 0.7) { // Exclude right 30%
             digitRegions.push({
               x: regionX,
               y: startY,
@@ -218,22 +287,34 @@
           }
         }
 
-        // Recognize digits
+        // Recognize digits with template matching
         let text = '';
         const digitResults = [];
         debugText.textContent = 'Processing image...';
         for (let i = 0; i < digitRegions.length; i++) {
           const region = digitRegions[i];
-          const digit = recognize7Segment(region, tempData);
-          if (digit !== null) {
+          // Validate region has enough bright pixels
+          const regionData = ctx.getImageData(region.x, region.y, region.width, region.height).data;
+          let brightCount = 0;
+          for (let j = 0; j < regionData.length; j += 4) {
+            if (regionData[j] === 255) brightCount++;
+          }
+          const brightRatio = brightCount / (region.width * region.height);
+          if (brightRatio < 0.2) { // Reject if <20% bright pixels
+            digitResults.push(`Region ${i + 1}: None (low density)`);
+            continue;
+          }
+
+          const { digit, sad } = recognize7Segment(region);
+          if (digit !== null && sad < 0.3) { // Strict SAD threshold
             text += digit;
-            digitResults.push(`Region ${i + 1}: ${digit}`);
+            digitResults.push(`Region ${i + 1}: ${digit} (SAD: ${sad.toFixed(2)})`);
           } else {
-            digitResults.push(`Region ${i + 1}: None`);
+            digitResults.push(`Region ${i + 1}: None (SAD: ${sad ? sad.toFixed(2) : 'N/A'})`);
           }
         }
 
-        // Decimal point detection (check below digits, avoid top-right)
+        // Decimal point detection
         const decimalRegion = {
           x: startX + 2.5 * regionWidth,
           y: startY + regionHeight - Math.floor(regionHeight / 4),
@@ -282,33 +363,36 @@
       }
     }
 
-    // Recognize a single 7-segment digit
-    function recognize7Segment(region, data) {
+    // Recognize a single 7-segment digit with template matching
+    function recognize7Segment(region) {
       const { x, y, width, height } = region;
-      const segmentPoints = [
-        { x: x + width / 2, y: y + height * 0.1 }, // Top
-        { x: x + width * 0.1, y: y + height * 0.3 }, // Top-left
-        { x: x + width * 0.9, y: y + height * 0.3 }, // Top-right
-        { x: x + width / 2, y: y + height / 2 }, // Middle
-        { x: x + width * 0.1, y: y + height * 0.7 }, // Bottom-left
-        { x: x + width * 0.9, y: y + height * 0.7 }, // Bottom-right
-        { x: x + width / 2, y: y + height * 0.9 } // Bottom
-      ];
+      // Resize region to 12x18 (matching template aspect ratio)
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 12;
+      tempCanvas.height = 18;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(canvas, x, y, width, height, 0, 0, 12, 18);
+      const regionData = tempCtx.getImageData(0, 0, 12, 18).data;
 
-      const segmentState = segmentPoints.map(point => {
-        const pixelX = Math.floor(point.x);
-        const pixelY = Math.floor(point.y);
-        if (pixelX < 0 || pixelX >= canvas.width || pixelY < 0 || pixelY >= canvas.height) return 0;
-        const index = (pixelY * canvas.width + pixelX) * 4;
-        return data[index] === 255 ? 1 : 0;
-      });
-
-      for (const [digit, pattern] of Object.entries(segmentPatterns)) {
-        if (segmentState.every((state, i) => state === pattern[i])) {
-          return digit;
+      let bestDigit = null;
+      let minSad = Infinity;
+      for (const [digit, template] of Object.entries(digitTemplates)) {
+        let sad = 0;
+        for (let i = 0; i < template.length; i++) {
+          const px = Math.floor(i % 12);
+          const py = Math.floor(i / 12);
+          const idx = (py * 12 + px) * 4;
+          const pixel = regionData[idx] / 255; // Normalize to 0-1
+          const diff = Math.abs(pixel - template[i]);
+          sad += diff;
+        }
+        sad /= template.length; // Normalize SAD
+        if (sad < minSad) {
+          minSad = sad;
+          bestDigit = digit;
         }
       }
-      return null;
+      return { digit: bestDigit, sad: minSad };
     }
 
     // Show preprocessed image
