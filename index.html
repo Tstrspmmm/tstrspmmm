@@ -10,7 +10,7 @@
 <body class="bg-gray-900 text-white font-sans">
   <div class="container mx-auto p-6 max-w-lg">
     <h1 class="text-4xl font-bold text-center mb-4 text-blue-400">Scale Reader</h1>
-    <p class="text-center text-gray-300 mb-6 text-lg">Aligmate your scale’s digits within the red box to read weights.</p>
+    <p class="text-center text-gray-300 mb-6 text-lg">Align your scaligma’s digits within the red box to read weights.</p>
 
     <div class="mb-6 relative">
       <video id="video" class="w-full rounded-lg shadow-lg" autoplay playsinline></video>
@@ -69,7 +69,7 @@
     let lastTime = Date.now();
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
-    let isDrawingROI = false;
+    let roiInterval = null;
 
     // Load saved readings
     function loadReadings() {
@@ -90,14 +90,16 @@
           video: { facingMode: 'environment' }
         });
         video.srcObject = stream;
-        startBtn.classList.add('hidden');
-        captureBtn.classList.remove('hidden');
-        showImageBtn.classList.remove('hidden');
-        // Start auto-capture every 0.3 seconds
-        autoCaptureInterval = setInterval(captureImage, 300);
-        // Start drawing ROI box
-        isDrawingROI = true;
-        drawROI();
+        // Wait for video metadata to load before drawing ROI
+        video.onloadedmetadata = () => {
+          startBtn.classList.add('hidden');
+          captureBtn.classList.remove('hidden');
+          showImageBtn.classList.remove('hidden');
+          // Start auto-capture every 0.3 seconds
+          autoCaptureInterval = setInterval(captureImage, 300);
+          // Start drawing ROI box with setInterval
+          roiInterval = setInterval(drawROI, 16); // ~60fps
+        };
       } catch (err) {
         debugText.textContent = 'Camera error: ' + err.message;
       }
@@ -105,7 +107,10 @@
 
     // Draw ROI box
     function drawROI() {
-      if (!isDrawingROI || !stream) return;
+      if (!stream || !video.srcObject) {
+        clearInterval(roiInterval);
+        return;
+      }
       overlay.width = video.videoWidth;
       overlay.height = video.videoHeight;
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
@@ -116,7 +121,6 @@
       overlayCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
       overlayCtx.lineWidth = 2;
       overlayCtx.strokeRect(roiX, roiY, roiWidth, roiHeight);
-      setTimeout(() => requestAnimationFrame(drawROI), 16); // Throttle to ~60fps
     }
 
     // Contrast stretch
@@ -132,7 +136,7 @@
 
       for (let i = 0; i < data.length; i += 4) {
         const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        const stretched = Math.min(255, Math.max(0, ((gray - min) / range) * 255 * 1.2));
+        const stretched = Math.min(255, Math.max(0, ((gray - min) / range) * 255 * 1.5));
         data[i] = data[i + 1] = data[i + 2] = stretched;
       }
     }
@@ -307,12 +311,15 @@
 
     // Stop stream and auto-capture
     window.addEventListener('beforeunload', () => {
-      isDrawingROI = false;
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
+        stream = null;
       }
       if (autoCaptureInterval) {
         clearInterval(autoCaptureInterval);
+      }
+      if (roiInterval) {
+        clearInterval(roiInterval);
       }
     });
   </script>
