@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scale Reader App</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="tesseract.min.js" onerror="document.getElementById('debugText').textContent='Error: Failed to load tesseract.min.js. Check file path or server.'"></script>
+  <script src="tesseract.js" onerror="document.getElementById('debugText').textContent='Error: Failed to load tesseract.js. Check file path or server.'"></script>
 </head>
 <body class="bg-gray-100 font-sans">
   <div class="container mx-auto p-4 max-w-md">
@@ -20,6 +20,11 @@
     <div class="flex justify-center space-x-4 mb-4">
       <button id="startBtn" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Start Camera</button>
       <button id="captureBtn" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 hidden">Manual Capture</button>
+      <button id="showImageBtn" class="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 hidden">Show Preprocessed Image</button>
+    </div>
+
+    <div id="preprocessedImage" class="mb-4 hidden">
+      <img id="processedImg" class="w-full rounded-lg shadow-md" alt="Preprocessed Image">
     </div>
 
     <div id="currentReading" class="text-center text-lg font-semibold mb-4">
@@ -47,6 +52,9 @@
     const ctx = canvas.getContext('2d');
     const startBtn = document.getElementById('startBtn');
     const captureBtn = document.getElementById('captureBtn');
+    const showImageBtn = document.getElementById('showImageBtn');
+    const processedImg = document.getElementById('processedImg');
+    const preprocessedImage = document.getElementById('preprocessedImage');
     const weightDisplay = document.getElementById('weight');
     const rateDisplay = document.getElementById('rate');
     const debugText = document.getElementById('debugText');
@@ -58,6 +66,7 @@
     let lastTime = Date.now();
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
+    let worker = null;
 
     // Log Tesseract availability
     console.log('Tesseract loaded:', !!window.Tesseract);
@@ -78,7 +87,7 @@
     }
     loadReadings();
 
-    // Start camera
+    // Start camera and initialize worker
     async function startCamera() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -87,19 +96,34 @@
         video.srcObject = stream;
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
+        showImageBtn.classList.remove('hidden');
+
+        // Initialize Tesseract worker
+        worker = await Tesseract.createWorker('eng', 1, {
+          workerPath: 'worker.js',
+          // Optional: Local language data (uncomment if hosting locally)
+          // langPath: './',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.0.0',
+          logger: m => console.log(m)
+        });
+        await worker.setParameters({
+          tessedit_char_whitelist: '0123456789.g',
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
+        });
+
         // Start auto-capture every 3 seconds
         autoCaptureInterval = setInterval(captureImage, 3000);
       } catch (err) {
-        debugText.textContent = 'Camera error: ' + err.message;
+        debugText.textContent = 'Error: ' + err.message;
       }
     }
 
     // Capture and process image
     async function captureImage() {
       try {
-        if (!window.Tesseract) {
-          debugText.textContent = 'Error: Tesseract.js not loaded';
-          console.error('Tesseract.js not loaded');
+        if (!worker) {
+          debugText.textContent = 'Error: Tesseract worker not initialized';
+          console.error('Tesseract worker not initialized');
           return;
         }
 
@@ -107,25 +131,40 @@
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Preprocess: Convert to grayscale and apply thresholding for 7-segment displays
+        // Preprocess: Convert to grayscale, enhance contrast, and apply thresholding
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
+        // Simple histogram equalization for contrast
+        const histogram = new Array(256).fill(0);
         for (let i = 0; i < data.length; i += 4) {
           const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          // Lower threshold for faint LCD/LED segments
-          const threshold = avg > 60 ? 255 : 0;
+          histogram[Math.floor(avg)]++;
+        }
+        const totalPixels = canvas.width * canvas.height;
+        let cumsum = 0;
+        const cdf = histogram.map(count => cumsum += count / totalPixels);
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          const equalized = Math.floor(cdf[Math.floor(avg)] * 255);
+          data[i] = data[i + 1] = data[i + 2] = equalized;
+        }
+
+        // Thresholding for 7-segment displays
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          const threshold = avg > 50 ? 255 : 0; // Lowered for faint LCD
           data[i] = data[i + 1] = data[i + 2] = threshold;
         }
 
-        // Basic dilation to connect 7-segment gaps
+        // Stronger dilation to connect 7-segment gaps
         const tempData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        for (let y = 1; y < canvas.height - 1; y++) {
-          for (let x = 1; x < canvas.width - 1; x++) {
+        for (let y = 2; y < canvas.height - 2; y++) {
+          for (let x = 2; x < canvas.width - 2; x++) {
             const i = (y * canvas.width + x) * 4;
             if (data[i] === 255) {
-              // Set neighboring pixels to white if center is white
-              for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
+              // 5x5 kernel for stronger dilation
+              for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
                   const ni = ((y + dy) * canvas.width + (x + dx)) * 4;
                   tempData.data[ni] = tempData.data[ni + 1] = tempData.data[ni + 2] = 255;
                 }
@@ -135,11 +174,11 @@
         }
         ctx.putImageData(tempData, 0, 0);
 
+        // Update preprocessed image for debugging
+        processedImg.src = canvas.toDataURL('image/png');
+
         debugText.textContent = 'Processing image...';
-        const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-          tessedit_char_whitelist: '0123456789.g',
-          tessedit_pageseg_mode: 8 // Single word for 7-segment displays
-        });
+        const { data: { text } } = await worker.recognize(canvas);
         debugText.textContent = `OCR Output: "${text}"`;
 
         const weightMatch = text.match(/\d+(\.\d+)?/);
@@ -173,6 +212,11 @@
       }
     }
 
+    // Show preprocessed image
+    showImageBtn.addEventListener('click', () => {
+      preprocessedImage.classList.toggle('hidden');
+    });
+
     // Clear log
     function clearLog() {
       readings = [];
@@ -185,13 +229,16 @@
     captureBtn.addEventListener('click', captureImage);
     clearLogBtn.addEventListener('click', clearLog);
 
-    // Stop stream and auto-capture when page unloads
+    // Stop stream, auto-capture, and worker when page unloads
     window.addEventListener('beforeunload', () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
       if (autoCaptureInterval) {
         clearInterval(autoCaptureInterval);
+      }
+      if (worker) {
+        worker.terminate();
       }
     });
   </script>
