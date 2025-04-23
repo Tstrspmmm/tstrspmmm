@@ -9,7 +9,7 @@
 <body class="bg-gray-100 font-sans">
   <div class="container mx-auto p-4 max-w-md">
     <h1 class="text-2xl font-bold text-center mb-4">Scale Reader App</h1>
-    <p class="text-center text-gray-600 mb-4">Pojnt your iPhone camera at your kitchen scale to log weight readings.</p>
+    <p class="text-center text-gray-600 mb-4">PointPoint your iPhone camera at your kitchen scale to log weight readings.</p>
 
     <div class="mb-4 relative">
       <video id="video" class="w-full rounded-lg shadow-md" autoplay playsinline></video>
@@ -73,14 +73,15 @@
     const digitTemplates = {
       '0': [
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,1,1,1,0,0,0,0,0,1,1,1,0,0,0,
+        0,1,1,1,0,0,0,0,0,0,0,1,1,1,0,0,
         0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
         1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
         1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
         1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
+        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
         0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,1,1,1,0,0,0,0,0,1,1,1,0,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '1': [
@@ -99,8 +100,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
         0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
         0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
@@ -111,8 +112,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
@@ -123,10 +124,10 @@
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0
@@ -135,8 +136,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
@@ -147,8 +148,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
@@ -171,8 +172,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
@@ -183,8 +184,8 @@
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
         0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
         0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
@@ -214,8 +215,8 @@
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
         showImageBtn.classList.remove('hidden');
-        // Fast auto-capture every 0.5 seconds
-        autoCaptureInterval = setInterval(captureImage, 500);
+        // Fast auto-capture every 0.3 seconds
+        autoCaptureInterval = setInterval(captureImage, 300);
         // Start drawing ROI box
         drawROI();
       } catch (err) {
@@ -240,7 +241,7 @@
     }
 
     // Adaptive thresholding
-    function adaptiveThreshold(data, width, height, windowSize = 10, k = 0.15) {
+    function adaptiveThreshold(data, width, height, windowSize = 8, k = 0.1) {
       const output = new Uint8ClampedArray(data.length);
       const integral = new Uint32Array(width * height);
       const integral2 = new Uint32Array(width * height);
@@ -368,13 +369,13 @@
             if (regionData[j] === 255) brightCount++;
           }
           const brightRatio = brightCount / (region.width * region.height);
-          if (brightRatio < 0.15) {
+          if (brightRatio < 0.1) {
             digitResults.push(`Region ${i + 1}: None (low density)`);
             continue;
           }
 
           const { digit, sad } = recognize7Segment(region);
-          if (digit !== null && sad < 0.4) {
+          if (digit !== null && sad < 0.5) {
             text += digit;
             digitResults.push(`Region ${i + 1}: ${digit} (SAD: ${sad.toFixed(2)})`);
           } else {
@@ -394,14 +395,14 @@
         for (let i = 0; i < decimalData.length; i += 4) {
           if (decimalData[i] === 255) decimalBright++;
         }
-        if (decimalBright > decimalRegion.width * decimalRegion.height * 0.2 && text.length >= 2) {
+        if (decimalBright > decimalRegion.width * decimalRegion.height * 0.2 && text.length >= 1) {
           text = text.slice(0, -1) + '.' + text.slice(-1);
         }
 
         debugText.textContent = `Recognized: "${text}" [${digitResults.join(', ')}]`;
 
         const weightMatch = text.match(/\d+(\.\d+)?/);
-        if (weightMatch) {
+        if (weightMatch && text.length >= 1) {
           const weight = parseFloat(weightMatch[0]);
           const currentTime = Date.now();
           const timeDiff = (currentTime - lastTime) / 1000;
