@@ -5,13 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scale Reader App</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.0.9/tesseract.min.js" integrity="sha512-MkfG91aIFb5Yf0XbN8s+TaH67s9X0p9Z7y0V9KfmqMkF8rW8s+83phb/LuV6jV+WRiY+dOOVKzXqQ62+AOyAZ9g==" crossorigin="anonymous"></script>
-  <script>
-    // Fallback if primary CDN fails
-    if (!window.Tesseract) {
-      document.write('<script src="https://unpkg.com/tesseract.js@4.0.9/dist/tesseract.min.js"><\/script>');
-    }
-  </script>
+  <script src="tesseract.min.js"></script>
 </head>
 <body class="bg-gray-100 font-sans">
   <div class="container mx-auto p-4 max-w-md">
@@ -67,6 +61,11 @@
 
     // Log Tesseract availability
     console.log('Tesseract loaded:', !!window.Tesseract);
+    if (window.Tesseract) {
+      debugText.textContent = 'Tesseract.js loaded successfully';
+    } else {
+      debugText.textContent = 'Error: Tesseract.js not loaded';
+    }
 
     // Load saved readings
     function loadReadings() {
