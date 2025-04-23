@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scale Reader App</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="tesseract.js" onerror="document.getElementById('debugText').textContent='Error: Failed to load tesseract.js. Check file path or server.'"></script>
 </head>
 <body class="bg-gray-100 font-sans">
   <div class="container mx-auto p-4 max-w-md">
@@ -66,15 +65,21 @@
     let lastTime = Date.now();
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
-    let worker = null;
 
-    // Log Tesseract availability
-    console.log('Tesseract loaded:', !!window.Tesseract);
-    if (window.Tesseract) {
-      debugText.textContent = 'Tesseract.js loaded successfully';
-    } else {
-      debugText.textContent = 'Error: Tesseract.js not loaded';
-    }
+    // 7-segment digit patterns (1 = segment on, 0 = segment off)
+    // Order: top, top-left, top-right, middle, bottom-left, bottom-right, bottom
+    const segmentPatterns = {
+      '0': [1, 1, 1, 0, 1, 1, 1],
+      '1': [0, 0, 1, 0, 0, 1, 0],
+      '2': [1, 0, 1, 1, 1, 0, 1],
+      '3': [1, 0, 1, 1, 0, 1, 1],
+      '4': [0, 1, 1, 1, 0, 1, 0],
+      '5': [1, 1, 0, 1, 0, 1, 1],
+      '6': [1, 1, 0, 1, 1, 1, 1],
+      '7': [1, 0, 1, 0, 0, 1, 0],
+      '8': [1, 1, 1, 1, 1, 1, 1],
+      '9': [1, 1, 1, 1, 0, 1, 1]
+    };
 
     // Load saved readings
     function loadReadings() {
@@ -87,7 +92,7 @@
     }
     loadReadings();
 
-    // Start camera and initialize worker
+    // Start camera
     async function startCamera() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -97,36 +102,16 @@
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
         showImageBtn.classList.remove('hidden');
-
-        // Initialize Tesseract worker
-        worker = await Tesseract.createWorker('eng', 1, {
-          workerPath: 'worker.js',
-          // Optional: Local language data (uncomment if hosting locally)
-          // langPath: './',
-          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.0.0',
-          logger: m => console.log(m)
-        });
-        await worker.setParameters({
-          tessedit_char_whitelist: '0123456789.g',
-          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
-        });
-
         // Start auto-capture every 3 seconds
         autoCaptureInterval = setInterval(captureImage, 3000);
       } catch (err) {
-        debugText.textContent = 'Error: ' + err.message;
+        debugText.textContent = 'Camera error: ' + err.message;
       }
     }
 
     // Capture and process image
     async function captureImage() {
       try {
-        if (!worker) {
-          debugText.textContent = 'Error: Tesseract worker not initialized';
-          console.error('Tesseract worker not initialized');
-          return;
-        }
-
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -134,7 +119,7 @@
         // Preprocess: Convert to grayscale, enhance contrast, and apply thresholding
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
-        // Simple histogram equalization for contrast
+        // Histogram equalization for contrast
         const histogram = new Array(256).fill(0);
         for (let i = 0; i < data.length; i += 4) {
           const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
@@ -156,13 +141,13 @@
           data[i] = data[i + 1] = data[i + 2] = threshold;
         }
 
-        // Stronger dilation to connect 7-segment gaps
+        // Dilation to connect 7-segment gaps
         const tempData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         for (let y = 2; y < canvas.height - 2; y++) {
           for (let x = 2; x < canvas.width - 2; x++) {
             const i = (y * canvas.width + x) * 4;
             if (data[i] === 255) {
-              // 5x5 kernel for stronger dilation
+              // 5x5 kernel
               for (let dy = -2; dy <= 2; dy++) {
                 for (let dx = -2; dx <= 2; dx++) {
                   const ni = ((y + dy) * canvas.width + (x + dx)) * 4;
@@ -177,9 +162,45 @@
         // Update preprocessed image for debugging
         processedImg.src = canvas.toDataURL('image/png');
 
+        // Simple digit segmentation (assume 3 digits, adjust based on scale)
+        const digitRegions = [];
+        const regionWidth = Math.floor(canvas.width / 4); // Estimate 3-4 digits
+        for (let i = 0; i < 3; i++) {
+          digitRegions.push({
+            x: i * regionWidth,
+            y: Math.floor(canvas.height / 4),
+            width: regionWidth,
+            height: Math.floor(canvas.height / 2)
+          });
+        }
+
+        // Recognize digits
+        let text = '';
         debugText.textContent = 'Processing image...';
-        const { data: { text } } = await worker.recognize(canvas);
-        debugText.textContent = `OCR Output: "${text}"`;
+        for (const region of digitRegions) {
+          const digit = recognize7Segment(region);
+          if (digit !== null) {
+            text += digit;
+          }
+        }
+
+        // Handle decimal point (simple heuristic: check for small bright region)
+        const decimalRegion = {
+          x: regionWidth * 2.5,
+          y: Math.floor(canvas.height * 3 / 4),
+          width: regionWidth / 4,
+          height: regionWidth / 4
+        };
+        const decimalData = ctx.getImageData(decimalRegion.x, decimalRegion.y, decimalRegion.width, decimalRegion.height).data;
+        let decimalBright = 0;
+        for (let i = 0; i < decimalData.length; i += 4) {
+          if (decimalData[i] === 255) decimalBright++;
+        }
+        if (decimalBright > decimalRegion.width * decimalRegion.height * 0.2) {
+          text = text.slice(0, -1) + '.' + text.slice(-1);
+        }
+
+        debugText.textContent = `Recognized: "${text}"`;
 
         const weightMatch = text.match(/\d+(\.\d+)?/);
         if (weightMatch) {
@@ -212,6 +233,41 @@
       }
     }
 
+    // Recognize a single 7-segment digit
+    function recognize7Segment(region) {
+      const { x, y, width, height } = region;
+      const segmentPoints = [
+        // Top: middle of top edge
+        { x: x + width / 2, y: y + height * 0.1 },
+        // Top-left: middle of left edge, upper half
+        { x: x + width * 0.1, y: y + height * 0.3 },
+        // Top-right: middle of right edge, upper half
+        { x: x + width * 0.9, y: y + height * 0.3 },
+        // Middle: middle of digit
+        { x: x + width / 2, y: y + height / 2 },
+        // Bottom-left: middle of left edge, lower half
+        { x: x + width * 0.1, y: y + height * 0.7 },
+        // Bottom-right: middle of right edge, lower half
+        { x: x + width * 0.9, y: y + height * 0.7 },
+        // Bottom: middle of bottom edge
+        { x: x + width / 2, y: y + height * 0.9 }
+      ];
+
+      const segmentState = segmentPoints.map(point => {
+        const pixelX = Math.floor(point.x);
+        const pixelY = Math.floor(point.y);
+        const index = (pixelY * canvas.width + pixelX) * 4;
+        return tempData.data[index] === 255 ? 1 : 0;
+      });
+
+      for (const [digit, pattern] of Object.entries(segmentPatterns)) {
+        if (segmentState.every((state, i) => state === pattern[i])) {
+          return digit;
+        }
+      }
+      return null;
+    }
+
     // Show preprocessed image
     showImageBtn.addEventListener('click', () => {
       preprocessedImage.classList.toggle('hidden');
@@ -229,16 +285,13 @@
     captureBtn.addEventListener('click', captureImage);
     clearLogBtn.addEventListener('click', clearLog);
 
-    // Stop stream, auto-capture, and worker when page unloads
+    // Stop stream and auto-capture when page unloads
     window.addEventListener('beforeunload', () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
       if (autoCaptureInterval) {
         clearInterval(autoCaptureInterval);
-      }
-      if (worker) {
-        worker.terminate();
       }
     });
   </script>
