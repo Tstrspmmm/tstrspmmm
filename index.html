@@ -5,44 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scale Reader App</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="lib/easyocr-wasm.js"></script>
 </head>
-<body class="bg-gray-100 font-sans">
-  <div class="container mx-auto p-4 max-w-md">
-    <h1 class="text-2xl font-bold text-center mb-4">Scale Reader App</h1>
-    <p class="text-center text-gray-600 mb-4">PointPoint your iPhone camera at your kitchen scale to log weight readings.</p>
+<body class="bg-gray-900 text-white font-sans">
+  <div class="container mx-auto p-6 max-w-lg">
+    <h1 class="text-3xl font-bold text-center mb-4 text-blue-400">Scale Reader</h1>
+    <p class="text-center text-gray-300 mb-6">Align your scale’s digits within the red box to read weights.</p>
 
-    <div class="mb-4 relative">
-      <video id="video" class="w-full rounded-lg shadow-md" autoplay playsinline></video>
+    <div class="mb-6 relative">
+      <video id="video" class="w-full rounded-lg shadow-lg" autoplay playsinline></video>
       <canvas id="overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
       <canvas id="canvas" class="hidden"></canvas>
     </div>
 
-    <div class="flex justify-center space-x-4 mb-4">
-      <button id="startBtn" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Start Camera</button>
-      <button id="captureBtn" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 hidden">Manual Capture</button>
-      <button id="showImageBtn" class="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 hidden">Show Preprocessed Image</button>
+    <div class="flex justify-center space-x-4 mb-6">
+      <button id="startBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">Start Camera</button>
+      <button id="captureBtn" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition hidden">Manual Capture</button>
+      <button id="showImageBtn" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition hidden">Toggle Preprocessed Image</button>
     </div>
 
-    <div id="preprocessedImage" class="mb-4 hidden">
-      <img id="processedImg" class="w-full rounded-lg shadow-md" alt="Preprocessed Image">
+    <div id="preprocessedImage" class="mb-6 hidden">
+      <img id="processedImg" class="w-full rounded-lg shadow-lg" alt="Preprocessed Image">
     </div>
 
-    <div id="currentReading" class="text-center text-lg font-semibold mb-4">
+    <div id="currentReading" class="text-center text-xl font-semibold mb-4 bg-gray-800 p-4 rounded-lg">
       Current Weight: <span id="weight">0</span> g
     </div>
 
-    <div id="pourRate" class="text-center text-md text-gray-700 mb-4">
+    <div id="pourRate" class="text-center text-lg text-gray-300 mb-4">
       Pour Rate: <span id="rate">0</span> g/s
     </div>
 
-    <div id="debug" class="text-center text-sm text-gray-500 mb-4">
+    <div id="debug" class="text-center text-sm text-gray-400 mb-4 bg-gray-800 p-4 rounded-lg">
       Debug: <span id="debugText">Waiting for capture...</span>
     </div>
 
-    <div class="bg-white p-4 rounded-lg shadow-md">
-      <h2 class="text-lg font-bold mb-2">Log</h2>
-      <ul id="logList" class="text-sm text-gray-600 max-h-40 overflow-y-auto"></ul>
-      <button id="clearLogBtn" class="mt-2 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full">Clear Log</button>
+    <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
+      <h2 class="text-lg font-bold mb-2 text-blue-400">Weight Log</h2>
+      <ul id="logList" class="text-sm text-gray-300 max-h-40 overflow-y-auto"></ul>
+      <button id="clearLogBtn" class="mt-4 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition w-full">Clear Log</button>
     </div>
   </div>
 
@@ -68,131 +69,7 @@
     let lastTime = Date.now();
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
-
-    // 7-segment digit templates (16x24 pixels, binary)
-    const digitTemplates = {
-      '0': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,1,1,1,0,0,0,0,0,1,1,1,0,0,0,
-        0,1,1,1,0,0,0,0,0,0,0,1,1,1,0,0,
-        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
-        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
-        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
-        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
-        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,1,1,1,0,0,0,0,0,1,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '1': [
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0
-      ],
-      '2': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '3': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '4': [
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0
-      ],
-      '5': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '6': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '7': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0
-      ],
-      '8': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ],
-      '9': [
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
-        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
-      ]
-    };
+    let ocrEngine = null;
 
     // Load saved readings
     function loadReadings() {
@@ -200,12 +77,13 @@
       readings.forEach(reading => {
         const li = document.createElement('li');
         li.textContent = `${reading.time}: ${reading.weight} g (Rate: ${reading.rate} g/s)`;
+        li.className = 'py-1';
         logList.appendChild(li);
       });
     }
     loadReadings();
 
-    // Start camera
+    // Start camera and initialize OCR
     async function startCamera() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -215,12 +93,17 @@
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
         showImageBtn.classList.remove('hidden');
-        // Fast auto-capture every 0.3 seconds
+
+        // Initialize EasyOCR
+        ocrEngine = new EasyOCR();
+        await ocrEngine.load();
+        debugText.textContent = 'OCR engine loaded successfully';
+
+        // Start auto-capture every 0.3 seconds
         autoCaptureInterval = setInterval(captureImage, 300);
-        // Start drawing ROI box
         drawROI();
       } catch (err) {
-        debugText.textContent = 'Camera error: ' + err.message;
+        debugText.textContent = 'Error: ' + err.message;
       }
     }
 
@@ -299,6 +182,11 @@
     // Capture and process image
     async function captureImage() {
       try {
+        if (!ocrEngine) {
+          debugText.textContent = 'Error: OCR engine not initialized';
+          return;
+        }
+
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -341,65 +229,47 @@
         // Update preprocessed image
         processedImg.src = canvas.toDataURL('image/png');
 
-        // Digit segmentation (3-4 digits)
-        const digitRegions = [];
-        const regionWidth = Math.floor(canvas.width / 5);
-        const regionHeight = Math.floor(canvas.height * 0.8);
-        const startX = Math.floor(canvas.width / 8);
-        const startY = Math.floor(canvas.height / 10);
-        for (let i = 0; i < 4; i++) {
-          const regionX = startX + i * regionWidth;
-          digitRegions.push({
-            x: regionX,
-            y: startY,
-            width: regionWidth,
-            height: regionHeight
-          });
+        // Validate ROI has enough bright pixels
+        let brightCount = 0;
+        for (let i = 0; i < tempData.length; i += 4) {
+          if (tempData[i] === 255) brightCount++;
+        }
+        const brightRatio = brightCount / (canvas.width * canvas.height);
+        if (brightRatio < 0.1) {
+          debugText.textContent = 'No digits detected (low density)';
+          return;
         }
 
-        // Recognize digits
-        let text = '';
-        const digitResults = [];
+        // Run EasyOCR
         debugText.textContent = 'Processing image...';
-        for (let i = 0; i < digitRegions.length; i++) {
-          const region = digitRegions[i];
-          const regionData = ctx.getImageData(region.x, region.y, region.width, region.height).data;
-          let brightCount = 0;
-          for (let j = 0; j < regionData.length; j += 4) {
-            if (regionData[j] === 255) brightCount++;
-          }
-          const brightRatio = brightCount / (region.width * region.height);
-          if (brightRatio < 0.1) {
-            digitResults.push(`Region ${i + 1}: None (low density)`);
-            continue;
-          }
+        const results = await ocrEngine.recognize(canvas);
+        const textResults = results.map(r => ({
+          text: r.text,
+          confidence: r.confidence
+        }));
 
-          const { digit, sad } = recognize7Segment(region);
-          if (digit !== null && sad < 0.5) {
-            text += digit;
-            digitResults.push(`Region ${i + 1}: ${digit} (SAD: ${sad.toFixed(2)})`);
+        // Filter for numeric text and high confidence
+        let text = '';
+        const debugResults = [];
+        textResults.forEach((r, i) => {
+          const cleanedText = r.text.replace(/[^0-9.]/g, '');
+          if (cleanedText && r.confidence > 0.5) {
+            text += cleanedText;
+            debugResults.push(`Text ${i + 1}: ${cleanedText} (Conf: ${r.confidence.toFixed(2)})`);
           } else {
-            digitResults.push(`Region ${i + 1}: None (SAD: ${sad ? sad.toFixed(2) : 'N/A'})`);
+            debugResults.push(`Text ${i + 1}: None (Conf: ${r.confidence.toFixed(2)})`);
+          }
+        });
+
+        // Handle decimal point
+        if (text.includes('.') && text.length >= 2) {
+          const parts = text.split('.');
+          if (parts.length === 2 && parts[1].length > 0) {
+            text = parts[0] + '.' + parts[1].slice(0, 1);
           }
         }
 
-        // Decimal point detection
-        const decimalRegion = {
-          x: startX + 2.5 * regionWidth,
-          y: startY + regionHeight - Math.floor(regionHeight / 4),
-          width: Math.floor(regionWidth / 4),
-          height: Math.floor(regionWidth / 4)
-        };
-        const decimalData = ctx.getImageData(decimalRegion.x, decimalRegion.y, decimalRegion.width, decimalRegion.height).data;
-        let decimalBright = 0;
-        for (let i = 0; i < decimalData.length; i += 4) {
-          if (decimalData[i] === 255) decimalBright++;
-        }
-        if (decimalBright > decimalRegion.width * decimalRegion.height * 0.2 && text.length >= 1) {
-          text = text.slice(0, -1) + '.' + text.slice(-1);
-        }
-
-        debugText.textContent = `Recognized: "${text}" [${digitResults.join(', ')}]`;
+        debugText.textContent = `Recognized: "${text}" [${debugResults.join(', ')}]`;
 
         const weightMatch = text.match(/\d+(\.\d+)?/);
         if (weightMatch && text.length >= 1) {
@@ -424,43 +294,12 @@
           lastWeight = weight;
           lastTime = currentTime;
         } else {
-          debugText.textContent = `No valid number found in "${text}" [${digitResults.join(', ')}]`;
+          debugText.textContent = `No valid number found in "${text}" [${debugResults.join(', ')}]`;
         }
       } catch (err) {
         debugText.textContent = 'Error: ' + err.message;
         console.error('Capture error:', err);
       }
-    }
-
-    // Recognize a single 7-segment digit
-    function recognize7Segment(region) {
-      const { x, y, width, height } = region;
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = 16;
-      tempCanvas.height = 24;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(canvas, x, y, width, height, 0, 0, 16, 24);
-      const regionData = tempCtx.getImageData(0, 0, 16, 24).data;
-
-      let bestDigit = null;
-      let minSad = Infinity;
-      for (const [digit, template] of Object.entries(digitTemplates)) {
-        let sad = 0;
-        for (let i = 0; i < template.length; i++) {
-          const px = Math.floor(i % 16);
-          const py = Math.floor(i / 16);
-          const idx = (py * 16 + px) * 4;
-          const pixel = regionData[idx] / 255;
-          const diff = Math.abs(pixel - template[i]);
-          sad += diff;
-        }
-        sad /= template.length;
-        if (sad < minSad) {
-          minSad = sad;
-          bestDigit = digit;
-        }
-      }
-      return { digit: bestDigit, sad: minSad };
     }
 
     // Show preprocessed image
@@ -487,6 +326,9 @@
       }
       if (autoCaptureInterval) {
         clearInterval(autoCaptureInterval);
+      }
+      if (ocrEngine) {
+        ocrEngine.destroy();
       }
     });
   </script>
