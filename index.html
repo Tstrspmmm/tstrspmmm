@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scale Reader App</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="lib/easyocr-wasm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ocrad.js@0.0.1/ocrad.min.js"></script>
 </head>
 <body class="bg-gray-900 text-white font-sans">
   <div class="container mx-auto p-6 max-w-lg">
@@ -69,7 +69,6 @@
     let lastTime = Date.now();
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
-    let ocrEngine = null;
 
     // Load saved readings
     function loadReadings() {
@@ -83,7 +82,7 @@
     }
     loadReadings();
 
-    // Start camera and initialize OCR
+    // Start camera
     async function startCamera() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -93,17 +92,11 @@
         startBtn.classList.add('hidden');
         captureBtn.classList.remove('hidden');
         showImageBtn.classList.remove('hidden');
-
-        // Initialize EasyOCR
-        ocrEngine = new EasyOCR();
-        await ocrEngine.load();
-        debugText.textContent = 'OCR engine loaded successfully';
-
-        // Start auto-capture every 0.3 seconds
+        // Fast auto-capture every 0.3 seconds
         autoCaptureInterval = setInterval(captureImage, 300);
         drawROI();
       } catch (err) {
-        debugText.textContent = 'Error: ' + err.message;
+        debugText.textContent = 'Camera error: ' + err.message;
       }
     }
 
@@ -182,11 +175,6 @@
     // Capture and process image
     async function captureImage() {
       try {
-        if (!ocrEngine) {
-          debugText.textContent = 'Error: OCR engine not initialized';
-          return;
-        }
-
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -240,39 +228,15 @@
           return;
         }
 
-        // Run EasyOCR
+        // Run Ocrad.js
         debugText.textContent = 'Processing image...';
-        const results = await ocrEngine.recognize(canvas);
-        const textResults = results.map(r => ({
-          text: r.text,
-          confidence: r.confidence
-        }));
+        const text = OCRAD(canvas, { numeric: true });
+        const cleanedText = text.replace(/[^0-9.]/g, '');
 
-        // Filter for numeric text and high confidence
-        let text = '';
-        const debugResults = [];
-        textResults.forEach((r, i) => {
-          const cleanedText = r.text.replace(/[^0-9.]/g, '');
-          if (cleanedText && r.confidence > 0.5) {
-            text += cleanedText;
-            debugResults.push(`Text ${i + 1}: ${cleanedText} (Conf: ${r.confidence.toFixed(2)})`);
-          } else {
-            debugResults.push(`Text ${i + 1}: None (Conf: ${r.confidence.toFixed(2)})`);
-          }
-        });
+        debugText.textContent = `Recognized: "${cleanedText}"`;
 
-        // Handle decimal point
-        if (text.includes('.') && text.length >= 2) {
-          const parts = text.split('.');
-          if (parts.length === 2 && parts[1].length > 0) {
-            text = parts[0] + '.' + parts[1].slice(0, 1);
-          }
-        }
-
-        debugText.textContent = `Recognized: "${text}" [${debugResults.join(', ')}]`;
-
-        const weightMatch = text.match(/\d+(\.\d+)?/);
-        if (weightMatch && text.length >= 1) {
+        const weightMatch = cleanedText.match(/\d+(\.\d+)?/);
+        if (weightMatch && cleanedText.length >= 1) {
           const weight = parseFloat(weightMatch[0]);
           const currentTime = Date.now();
           const timeDiff = (currentTime - lastTime) / 1000;
@@ -294,7 +258,7 @@
           lastWeight = weight;
           lastTime = currentTime;
         } else {
-          debugText.textContent = `No valid number found in "${text}" [${debugResults.join(', ')}]`;
+          debugText.textContent = `No valid number found in "${cleanedText}"`;
         }
       } catch (err) {
         debugText.textContent = 'Error: ' + err.message;
@@ -326,9 +290,6 @@
       }
       if (autoCaptureInterval) {
         clearInterval(autoCaptureInterval);
-      }
-      if (ocrEngine) {
-        ocrEngine.destroy();
       }
     });
   </script>
