@@ -118,6 +118,7 @@
     let debug = false;
     let preprocess = false;
     let dataLog = [];
+    let ocrInProgress = false;
 
     function toggleView(view) {
       document.getElementById('log').classList.remove('active');
@@ -176,45 +177,59 @@
     }
 
     async function startCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
       video.srcObject = stream;
     }
 
     async function captureAndRead() {
-      const w = canvas.width = video.videoWidth;
-      const h = canvas.height = video.videoHeight;
-      const roi = { x: w * 0.2, y: h * 0.425, width: w * 0.6, height: h * 0.15 };
+      if (ocrInProgress) return;
+      ocrInProgress = true;
+      try {
+        const w = canvas.width = video.videoWidth;
+        const h = canvas.height = video.videoHeight;
+        const roi = { x: w * 0.2, y: h * 0.425, width: w * 0.6, height: h * 0.15 };
 
-      ctx.drawImage(video, 0, 0, w, h);
-      let imageData = ctx.getImageData(roi.x, roi.y, roi.width, roi.height);
+        ctx.drawImage(video, 0, 0, w, h);
+        let imageData = ctx.getImageData(roi.x, roi.y, roi.width, roi.height);
 
-      if (preprocess) {
-        const data = imageData.data;
-        for (let i = 0; i < data.length; i += 4) {
-          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          data[i] = data[i + 1] = data[i + 2] = avg > 128 ? 255 : 0;
+        if (preprocess) {
+          const data = imageData.data;
+          for (let i = 0; i < data.length; i += 4) {
+            const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            data[i] = data[i + 1] = data[i + 2] = avg > 128 ? 255 : 0;
+          }
+          ctx.putImageData(imageData, roi.x, roi.y);
         }
-        ctx.putImageData(imageData, roi.x, roi.y);
+
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = roi.width;
+        croppedCanvas.height = roi.height;
+        const croppedCtx = croppedCanvas.getContext('2d');
+        croppedCtx.putImageData(ctx.getImageData(roi.x, roi.y, roi.width, roi.height), 0, 0);
+
+        const result = await Tesseract.recognize(croppedCanvas, 'eng', {
+          tessedit_char_whitelist: '0123456789.',
+        });
+
+        const text = result.data.text.replace(/[^0-9.]/g, '').trim();
+        const weight = parseFloat(text);
+        if (!isNaN(weight)) logWeight(weight);
+      } catch (e) {
+        console.error('OCR Error:', e);
       }
-
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = roi.width;
-      croppedCanvas.height = roi.height;
-      const croppedCtx = croppedCanvas.getContext('2d');
-      croppedCtx.putImageData(ctx.getImageData(roi.x, roi.y, roi.width, roi.height), 0, 0);
-
-      const result = await Tesseract.recognize(croppedCanvas, 'eng', {
-        tessedit_char_whitelist: '0123456789.',
-      });
-
-      const text = result.data.text.replace(/[^0-9.]/g, '').trim();
-      const weight = parseFloat(text);
-      if (!isNaN(weight)) logWeight(weight);
+      ocrInProgress = false;
     }
 
     setInterval(() => {
       if (video.readyState >= 2) captureAndRead();
-    }, 200);
+    }, 500);
 
     startCamera();
   </script>
