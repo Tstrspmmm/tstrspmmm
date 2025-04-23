@@ -93,7 +93,7 @@
         captureBtn.classList.remove('hidden');
         showImageBtn.classList.remove('hidden');
         // Fast auto-capture every 0.3 seconds
-        autoCaptureInterval = setInterval(captureImage, 150);
+        autoCaptureInterval = setInterval(captureImage, 300);
         drawROI();
       } catch (err) {
         debugText.textContent = 'Camera error: ' + err.message;
