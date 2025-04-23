@@ -11,8 +11,9 @@
     <h1 class="text-2xl font-bold text-center mb-4">Scale Reader App</h1>
     <p class="text-center text-gray-600 mb-4">Point your iPhone camera at your kitchen scale to log weight readings.</p>
 
-    <div class="mb-4">
+    <div class="mb-4 relative">
       <video id="video" class="w-full rounded-lg shadow-md" autoplay playsinline></video>
+      <canvas id="overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
       <canvas id="canvas" class="hidden"></canvas>
     </div>
 
@@ -49,6 +50,8 @@
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
     const startBtn = document.getElementById('startBtn');
     const captureBtn = document.getElementById('captureBtn');
     const showImageBtn = document.getElementById('showImageBtn');
@@ -66,87 +69,127 @@
     let readings = JSON.parse(localStorage.getItem('scaleReadings')) || [];
     let autoCaptureInterval = null;
 
-    // 7-segment digit templates (simplified binary images, 16x24 pixels)
+    // 7-segment digit templates (16x24 pixels, binary)
     const digitTemplates = {
       '0': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,1,1,0,0,0,0,0,0,1,1,0,
-        1,1,0,0,0,0,0,0,0,0,1,1,
-        1,1,0,0,0,0,0,0,0,0,1,1,
-        0,1,1,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
+        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
+        1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '1': [
-        0,0,0,0,0,1,1,0,0,0,0,0,
-        0,0,0,0,0,1,1,0,0,0,0,0,
-        0,0,0,0,0,1,1,0,0,0,0,0,
-        0,0,0,0,0,1,1,0,0,0,0,0,
-        0,0,0,0,0,1,1,0,0,0,0,0,
-        0,0,0,0,0,1,1,0,0,0,0,0
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0
       ],
       '2': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,1,1,0,0,0,0,0,0,0,0,0,
-        0,1,1,0,0,0,0,0,0,0,0,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '3': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '4': [
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0
       ],
       '5': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '6': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,0,0,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '7': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0
       ],
       '8': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ],
       '9': [
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,1,1,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,0,0,0,0,0,0,0,1,1,0,
-        0,0,1,1,1,1,1,1,1,1,0,0
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,
+        0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0
       ]
     };
 
@@ -173,18 +216,35 @@
         showImageBtn.classList.remove('hidden');
         // Fast auto-capture every 0.5 seconds
         autoCaptureInterval = setInterval(captureImage, 500);
+        // Start drawing ROI box
+        drawROI();
       } catch (err) {
         debugText.textContent = 'Camera error: ' + err.message;
       }
     }
 
+    // Draw ROI box
+    function drawROI() {
+      if (!stream) return;
+      overlay.width = video.videoWidth;
+      overlay.height = video.videoHeight;
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      const roiWidth = Math.floor(overlay.width * 0.7);
+      const roiHeight = Math.floor(overlay.height / 2);
+      const roiX = Math.floor(overlay.width / 8);
+      const roiY = Math.floor(overlay.height / 4);
+      overlayCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+      overlayCtx.lineWidth = 2;
+      overlayCtx.strokeRect(roiX, roiY, roiWidth, roiHeight);
+      requestAnimationFrame(drawROI);
+    }
+
     // Adaptive thresholding
-    function adaptiveThreshold(data, width, height, windowSize = 15, k = 0.2) {
+    function adaptiveThreshold(data, width, height, windowSize = 10, k = 0.15) {
       const output = new Uint8ClampedArray(data.length);
       const integral = new Uint32Array(width * height);
       const integral2 = new Uint32Array(width * height);
 
-      // Compute integral images
       for (let y = 0; y < height; y++) {
         let sum = 0;
         let sum2 = 0;
@@ -203,7 +263,6 @@
         }
       }
 
-      // Apply adaptive thresholding
       const halfWindow = Math.floor(windowSize / 2);
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -243,12 +302,24 @@
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+        // Define ROI
+        const roiWidth = Math.floor(canvas.width * 0.7);
+        const roiHeight = Math.floor(canvas.height / 2);
+        const roiX = Math.floor(canvas.width / 8);
+        const roiY = Math.floor(canvas.height / 4);
+
+        // Crop to ROI
+        const roiData = ctx.getImageData(roiX, roiY, roiWidth, roiHeight);
+        canvas.width = roiWidth;
+        canvas.height = roiHeight;
+        ctx.putImageData(roiData, 0, 0);
+
         // Preprocess: Convert to grayscale and apply adaptive thresholding
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
-        const thresholdedData = adaptiveThreshold(data, canvas.width, canvas.height, 15, 0.2);
+        const thresholdedData = adaptiveThreshold(data, canvas.width, canvas.height);
 
-        // Dilation to connect 7-segment gaps (3x3 kernel)
+        // Dilation (3x3 kernel)
         const tempData = new Uint8ClampedArray(thresholdedData);
         for (let y = 1; y < canvas.height - 1; y++) {
           for (let x = 1; x < canvas.width - 1; x++) {
@@ -266,47 +337,44 @@
         }
         ctx.putImageData(new ImageData(tempData, canvas.width, canvas.height), 0, 0);
 
-        // Update preprocessed image for debugging
+        // Update preprocessed image
         processedImg.src = canvas.toDataURL('image/png');
 
-        // Digit segmentation (3-4 digits, exclude top-right "g")
+        // Digit segmentation (3-4 digits)
         const digitRegions = [];
         const regionWidth = Math.floor(canvas.width / 5);
-        const regionHeight = Math.floor(canvas.height / 2);
-        const startX = Math.floor(canvas.width / 8); // Shift left
-        const startY = Math.floor(canvas.height / 4);
+        const regionHeight = Math.floor(canvas.height * 0.8);
+        const startX = Math.floor(canvas.width / 8);
+        const startY = Math.floor(canvas.height / 10);
         for (let i = 0; i < 4; i++) {
           const regionX = startX + i * regionWidth;
-          if (regionX + regionWidth < canvas.width * 0.7) { // Exclude right 30%
-            digitRegions.push({
-              x: regionX,
-              y: startY,
-              width: regionWidth,
-              height: regionHeight
-            });
-          }
+          digitRegions.push({
+            x: regionX,
+            y: startY,
+            width: regionWidth,
+            height: regionHeight
+          });
         }
 
-        // Recognize digits with template matching
+        // Recognize digits
         let text = '';
         const digitResults = [];
         debugText.textContent = 'Processing image...';
         for (let i = 0; i < digitRegions.length; i++) {
           const region = digitRegions[i];
-          // Validate region has enough bright pixels
           const regionData = ctx.getImageData(region.x, region.y, region.width, region.height).data;
           let brightCount = 0;
           for (let j = 0; j < regionData.length; j += 4) {
             if (regionData[j] === 255) brightCount++;
           }
           const brightRatio = brightCount / (region.width * region.height);
-          if (brightRatio < 0.2) { // Reject if <20% bright pixels
+          if (brightRatio < 0.15) {
             digitResults.push(`Region ${i + 1}: None (low density)`);
             continue;
           }
 
           const { digit, sad } = recognize7Segment(region);
-          if (digit !== null && sad < 0.3) { // Strict SAD threshold
+          if (digit !== null && sad < 0.4) {
             text += digit;
             digitResults.push(`Region ${i + 1}: ${digit} (SAD: ${sad.toFixed(2)})`);
           } else {
@@ -363,30 +431,29 @@
       }
     }
 
-    // Recognize a single 7-segment digit with template matching
+    // Recognize a single 7-segment digit
     function recognize7Segment(region) {
       const { x, y, width, height } = region;
-      // Resize region to 12x18 (matching template aspect ratio)
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = 12;
-      tempCanvas.height = 18;
+      tempCanvas.width = 16;
+      tempCanvas.height = 24;
       const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(canvas, x, y, width, height, 0, 0, 12, 18);
-      const regionData = tempCtx.getImageData(0, 0, 12, 18).data;
+      tempCtx.drawImage(canvas, x, y, width, height, 0, 0, 16, 24);
+      const regionData = tempCtx.getImageData(0, 0, 16, 24).data;
 
       let bestDigit = null;
       let minSad = Infinity;
       for (const [digit, template] of Object.entries(digitTemplates)) {
         let sad = 0;
         for (let i = 0; i < template.length; i++) {
-          const px = Math.floor(i % 12);
-          const py = Math.floor(i / 12);
-          const idx = (py * 12 + px) * 4;
-          const pixel = regionData[idx] / 255; // Normalize to 0-1
+          const px = Math.floor(i % 16);
+          const py = Math.floor(i / 16);
+          const idx = (py * 16 + px) * 4;
+          const pixel = regionData[idx] / 255;
           const diff = Math.abs(pixel - template[i]);
           sad += diff;
         }
-        sad /= template.length; // Normalize SAD
+        sad /= template.length;
         if (sad < minSad) {
           minSad = sad;
           bestDigit = digit;
@@ -412,7 +479,7 @@
     captureBtn.addEventListener('click', captureImage);
     clearLogBtn.addEventListener('click', clearLog);
 
-    // Stop stream and auto-capture when page unloads
+    // Stop stream and auto-capture
     window.addEventListener('beforeunload', () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
