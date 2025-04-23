@@ -1,180 +1,222 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!--
-    Espresso Scale Logger
-    ----------------------
-    A single-file web app (index.html) for iPhone Safari to read a 7-segment kitchen scale display
-    via rear camera, log weights and pour rates (g/s) with timestamps, and visualize as text or line graph.
-    Setup: Just open index.html in Safari on iOS (allow camera access). No popups, no server.
-  -->
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Espresso Scale Logger</title>
-  <!-- External libraries (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
   <style>
-    body, html { margin:0; padding:0; overflow:hidden; height:100%; background:#000; }
-    #video { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: black;
+      color: white;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
     .overlay {
-      position: absolute; top:0; left:0; width:100%; height:100%;
-      backdrop-filter: blur(8px) brightness(1.1);
-      display: flex; flex-direction: column;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      backdrop-filter: blur(8px) brightness(0.8);
       pointer-events: none;
     }
-    .panel { margin:1em; padding:1em; background:rgba(255,255,255,0.2); border-radius:12px; pointer-events:auto; }
-    #controls { align-self:flex-end; }
-    button { padding:0.5em 1em; margin:0.2em; font-size:1em; }
-    #roi { position:absolute; top:30%; left:10%; width:80%; height:40%; border:2px dashed #fff; box-sizing:border-box; }
-    #debug { position:absolute; bottom:0; left:0; width:100%; background:rgba(0,0,0,0.5); color:#0f0; font-family:monospace; font-size:0.8em; padding:0.5em; }
-    #textLog, #chartContainer { display:none; max-height:40%; overflow:auto; background:rgba(255,255,255,0.2); border-radius:12px; margin:1em; padding:1em; }
-    #textLog.active, #chartContainer.active { display:block; }
+    .ui {
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 10px;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      z-index: 2;
+    }
+    .log, .graph {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      max-height: 40%;
+      background: rgba(0, 0, 0, 0.7);
+      overflow-y: auto;
+      font-size: 14px;
+      padding: 10px;
+      display: none;
+    }
+    .active {
+      display: block !important;
+    }
+    .roi {
+      position: absolute;
+      border: 2px dashed #0f0;
+      box-sizing: border-box;
+      width: 60%;
+      height: 15%;
+      top: 42.5%;
+      left: 20%;
+      z-index: 2;
+    }
+    .debug-banner {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #f00;
+      color: white;
+      padding: 4px 8px;
+      z-index: 3;
+      font-size: 12px;
+    }
+    button {
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.1);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      margin-left: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline></video>
-  <div id="roi"></div>
-  <div class="overlay">
-    <div id="controls" class="panel">
-      <button id="toggleView">Show Graph</button>
-      <button id="togglePreproc">Toggle Preproc</button>
-      <button id="resetLog">Reset</button>
+  <canvas id="canvas" style="display:none"></canvas>
+  <div class="overlay"></div>
+  <div class="ui">
+    <div>
+      <button onclick="toggleView('log')">Log</button>
+      <button onclick="toggleView('graph')">Graph</button>
+      <button onclick="toggleDebug()">Debug</button>
     </div>
-    <div id="textLog" class="panel active"></div>
-    <div id="chartContainer" class="panel">
-      <canvas id="chart"></canvas>
+    <div>
+      <button onclick="togglePreprocess()">Preproc</button>
     </div>
   </div>
-  <div id="debug"></div>
-  <canvas id="capture" style="display:none;"></canvas>
-  <canvas id="preproc" style="display:none;"></canvas>
+  <div id="log" class="log active"></div>
+  <canvas id="graph" class="graph"></canvas>
+  <div class="roi"></div>
+  <div id="debug" class="debug-banner" style="display:none">DEBUG</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
   <script>
-  (async ()=>{
     const video = document.getElementById('video');
-    const debug = document.getElementById('debug');
-    const textLog = document.getElementById('textLog');
-    const chartContainer = document.getElementById('chartContainer');
-    const toggleView = document.getElementById('toggleView');
-    const togglePreproc = document.getElementById('togglePreproc');
-    const resetLog = document.getElementById('resetLog');
-    const roi = document.getElementById('roi');
-    const capCanvas = document.getElementById('capture');
-    const preCanvas = document.getElementById('preproc');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const logEl = document.getElementById('log');
+    const graphCanvas = document.getElementById('graph');
+    const graphCtx = graphCanvas.getContext('2d');
+    const debugEl = document.getElementById('debug');
 
-    let log = [];
-    let showGraph = false;
-    let showPre = false;
-    const INTERVAL = 200;
+    let debug = false;
+    let preprocess = false;
+    let dataLog = [];
 
-    // Check if getUserMedia is supported
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("Camera access is not supported on this device/browser.");
-      return;
+    function toggleView(view) {
+      document.getElementById('log').classList.remove('active');
+      document.getElementById('graph').classList.remove('active');
+      document.getElementById(view).classList.add('active');
+      if (view === 'graph') drawGraph();
     }
 
-    try {
-      const constraints = {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = stream;
-    } catch (err) {
-      console.error('Camera error', err);
-      alert('Failed to access the camera. Please check permissions in Safari settings.');
-      return;
+    function toggleDebug() {
+      debug = !debug;
+      debugEl.style.display = debug ? 'block' : 'none';
     }
 
-    const ctx = document.getElementById('chart').getContext('2d');
-    const chart = new Chart(ctx, {
-      type:'line',
-      data:{ labels:[], datasets:[{ label:'Weight (g)', data:[], tension:0.3 }] },
-      options:{ animation:false, scales:{ x:{ display:false }, y:{ beginAtZero:true } } }
-    });
-
-    const worker = Tesseract.createWorker({ logger:m => debug.textContent = JSON.stringify(m) });
-    await worker.load();
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
-    await worker.setParameters({ tessedit_char_whitelist:'0123456789.' });
-
-    function logReading(weight) {
-      const t = Date.now();
-      log.push({ t, weight });
-      if (log.length > 1) {
-        const dt = (t - log[log.length - 2].t) / 1000;
-        const dw = weight - log[log.length - 2].weight;
-        log[log.length - 1].rate = dw / dt;
-      } else log[0].rate = 0;
+    function togglePreprocess() {
+      preprocess = !preprocess;
     }
 
-    function updateTextLog() {
-      textLog.innerHTML = log.map(e => {
-        const ts = new Date(e.t).toLocaleTimeString();
-        return `${ts}: ${e.weight.toFixed(1)} g @ ${e.rate.toFixed(1)} g/s`;
-      }).join('<br>');
-    }
-
-    function updateChart() {
+    function logWeight(weight) {
       const now = Date.now();
-      const cutoff = now - 60000;
-      const recent = log.filter(e => e.t >= cutoff);
-      chart.data.labels = recent.map(e => new Date(e.t).toLocaleTimeString());
-      chart.data.datasets[0].data = recent.map(e => e.weight);
-      chart.update();
-    }
-
-    async function captureLoop() {
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if (!vw || !vh) { setTimeout(captureLoop, 100); return; }
-      const r = roi.getBoundingClientRect();
-      const vRect = video.getBoundingClientRect();
-      const sx = (r.left - vRect.left) / vRect.width * vw;
-      const sy = (r.top - vRect.top) / vRect.height * vh;
-      const sw = r.width / vRect.width * vw;
-      const sh = r.height / vRect.height * vh;
-
-      capCanvas.width = sw; capCanvas.height = sh;
-      const xCtx = capCanvas.getContext('2d');
-      xCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-
-      preCanvas.width = sw; preCanvas.height = sh;
-      const pCtx = preCanvas.getContext('2d');
-      const imgData = xCtx.getImageData(0, 0, sw, sh);
-      const d = imgData.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const g = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        d[i] = d[i + 1] = d[i + 2] = g > 128 ? 255 : 0;
+      if (dataLog.length > 0) {
+        const dt = (now - dataLog[dataLog.length - 1].time) / 1000;
+        const dWeight = weight - dataLog[dataLog.length - 1].weight;
+        const rate = (dWeight / dt).toFixed(2);
+        logEl.innerText += `\n${weight} g @ ${rate} g/s`;
+      } else {
+        logEl.innerText += `\n${weight} g`;
       }
-      pCtx.putImageData(imgData, 0, 0);
-
-      const { data: { text }} = await worker.recognize(showPre ? preCanvas : capCanvas);
-      const num = parseFloat(text) || 0;
-      logReading(num);
-      updateTextLog();
-      if (showGraph) updateChart();
-      requestAnimationFrame(() => setTimeout(captureLoop, INTERVAL));
+      dataLog.push({ weight, time: now });
+      logEl.scrollTop = logEl.scrollHeight;
     }
 
-    toggleView.onclick = () => {
-      showGraph = !showGraph;
-      textLog.classList.toggle('active', !showGraph);
-      chartContainer.classList.toggle('active', showGraph);
-      toggleView.textContent = showGraph ? 'Show Log' : 'Show Graph';
-    };
-    togglePreproc.onclick = () => showPre = !showPre;
-    resetLog.onclick = () => { log = []; updateTextLog(); updateChart(); };
+    function drawGraph() {
+      graphCanvas.width = window.innerWidth;
+      graphCanvas.height = window.innerHeight * 0.4;
+      graphCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
 
-    await new Promise(r => setTimeout(r, 1000));
-    captureLoop();
-  })();
+      const now = Date.now();
+      const recent = dataLog.filter(d => now - d.time <= 60000);
+      if (recent.length < 2) return;
+
+      const minTime = recent[0].time;
+      const maxTime = recent[recent.length - 1].time;
+      const minWeight = Math.min(...recent.map(d => d.weight));
+      const maxWeight = Math.max(...recent.map(d => d.weight));
+
+      graphCtx.beginPath();
+      recent.forEach((d, i) => {
+        const x = ((d.time - minTime) / (maxTime - minTime)) * graphCanvas.width;
+        const y = graphCanvas.height - ((d.weight - minWeight) / (maxWeight - minWeight)) * graphCanvas.height;
+        if (i === 0) graphCtx.moveTo(x, y);
+        else graphCtx.lineTo(x, y);
+      });
+      graphCtx.strokeStyle = 'lime';
+      graphCtx.lineWidth = 2;
+      graphCtx.stroke();
+    }
+
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      video.srcObject = stream;
+    }
+
+    async function captureAndRead() {
+      const w = canvas.width = video.videoWidth;
+      const h = canvas.height = video.videoHeight;
+      const roi = { x: w * 0.2, y: h * 0.425, width: w * 0.6, height: h * 0.15 };
+
+      ctx.drawImage(video, 0, 0, w, h);
+      let imageData = ctx.getImageData(roi.x, roi.y, roi.width, roi.height);
+
+      if (preprocess) {
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          data[i] = data[i + 1] = data[i + 2] = avg > 128 ? 255 : 0;
+        }
+        ctx.putImageData(imageData, roi.x, roi.y);
+      }
+
+      const croppedCanvas = document.createElement('canvas');
+      croppedCanvas.width = roi.width;
+      croppedCanvas.height = roi.height;
+      const croppedCtx = croppedCanvas.getContext('2d');
+      croppedCtx.putImageData(ctx.getImageData(roi.x, roi.y, roi.width, roi.height), 0, 0);
+
+      const result = await Tesseract.recognize(croppedCanvas, 'eng', {
+        tessedit_char_whitelist: '0123456789.',
+      });
+
+      const text = result.data.text.replace(/[^0-9.]/g, '').trim();
+      const weight = parseFloat(text);
+      if (!isNaN(weight)) logWeight(weight);
+    }
+
+    setInterval(() => {
+      if (video.readyState >= 2) captureAndRead();
+    }, 200);
+
+    startCamera();
   </script>
 </body>
 </html>
