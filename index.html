@@ -3,216 +3,272 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Espresso Scale Logger (7-Seg OCR)</title>
+  <title>Espresso Scale Logger</title>
   <style>
     html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;
       font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
     video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
-    .overlay{position:absolute;inset:0;backdrop-filter:brightness(0.8);pointer-events:none;}
-    .ui{position:absolute;top:10px;left:10px;z-index:3;display:flex;gap:8px;}
-    .ui button{padding:6px 12px;background:rgba(255,255,255,0.1);border:none;border-radius:6px;color:#fff;}
-    #current{position:absolute;top:50%;width:100%;text-align:center;transform:translateY(-50%);
-      font-size:3em;z-index:2;pointer-events:none;}
-    .log,.graph{position:absolute;bottom:0;width:100%;max-height:40%;background:rgba(0,0,0,0.7);
-      overflow-y:auto;font-size:14px;padding:10px;display:none;z-index:2;}
+    #overlay{z-index:2;pointer-events:none;}
+    #current{position:absolute;top:50%;width:100%;text-align:center;
+      transform:translateY(-50%);font-size:3em;z-index:3;pointer-events:none;}
+    .ui{position:absolute;top:10px;left:10px;z-index:4;display:flex;gap:8px;}
+    .ui button{padding:6px 12px;background:rgba(255,255,255,0.1);
+      border:none;border-radius:6px;color:#fff;}
+    .log,.graph{position:absolute;bottom:0;width:100%;max-height:40%;
+      background:rgba(0,0,0,0.7);overflow-y:auto;font-size:14px;
+      padding:10px;display:none;z-index:3;}
     .log.active,.graph.active{display:block!important;}
-    .roi{position:absolute;border:2px dashed #0f0;box-sizing:border-box;
-      width:60%;height:15%;top:42.5%;left:20%;z-index:1;pointer-events:none;}
-    #debug{position:absolute;top:10px;right:10px;background:#f00;padding:4px 8px;
-      font-size:12px;display:none;z-index:3;color:#fff;}
+    #debug{position:absolute;top:10px;right:10px;background:#f00;
+      padding:4px 8px;font-size:12px;display:none;z-index:4;color:#fff;}
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline></video>
   <canvas id="proc" style="display:none"></canvas>
-  <canvas id="roi" style="display:none"></canvas>
-  <div class="overlay"></div>
+  <canvas id="overlay"></canvas>
   <div id="current">– g</div>
   <div class="ui">
     <button id="btnLog">Log</button>
     <button id="btnGraph">Graph</button>
     <button id="btnDebug">Debug</button>
+    <button id="btnCSV">Export CSV</button>
   </div>
   <div id="log" class="log active"></div>
   <canvas id="graph" class="graph"></canvas>
-  <div class="roi"></div>
   <div id="debug">DEBUG</div>
 
-<script>
-(async()=> {
-  // DOM
-  const video = document.getElementById('video');
-  const proc  = document.getElementById('proc'), pctx = proc.getContext('2d');
-  const roi   = document.getElementById('roi'),  rctx = roi.getContext('2d');
-  const currentEl = document.getElementById('current');
-  const logEl     = document.getElementById('log');
-  const graph     = document.getElementById('graph'), gctx = graph.getContext('2d');
-  const btnLog    = document.getElementById('btnLog');
-  const btnGraph  = document.getElementById('btnGraph');
-  const btnDebug  = document.getElementById('btnDebug');
-  const debugEl   = document.getElementById('debug');
+  <!-- OpenCV.js -->
+  <script async src="https://docs.opencv.org/master/opencv.js" onload="cv['onRuntimeInitialized']=()=>window.cvReady=true;"></script>
+  <script>
+  (async()=>{
+    // wait for OpenCV
+    while(!window.cvReady) await new Promise(r=>setTimeout(r,50));
 
-  // State
-  let showLog=true, debug=false;
-  let dataLog=[], lastWeight=0, lastChange=Date.now();
-  let zeroBuf=[], autoStarted=false;
-  const ZERO_COUNT=10, ZERO_MARGIN=0.5;
+    // DOM refs
+    const video = document.getElementById('video'),
+          proc = document.getElementById('proc'),
+          pctx = proc.getContext('2d'),
+          overlay = document.getElementById('overlay'),
+          ovCtx = overlay.getContext('2d'),
+          currentEl = document.getElementById('current'),
+          logEl = document.getElementById('log'),
+          graphEl = document.getElementById('graph'),
+          gctx = graphEl.getContext('2d'),
+          btnLog = document.getElementById('btnLog'),
+          btnGraph = document.getElementById('btnGraph'),
+          btnDebug = document.getElementById('btnDebug'),
+          btnCSV = document.getElementById('btnCSV'),
+          debugEl = document.getElementById('debug');
 
-  // UI toggles
-  btnLog.onclick   = ()=>{ showLog=true; logEl.classList.add('active'); graph.classList.remove('active'); };
-  btnGraph.onclick = ()=>{ showLog=false; graph.classList.add('active'); logEl.classList.remove('active'); drawGraph(); };
-  btnDebug.onclick = ()=>{ debug = !debug; debugEl.style.display = debug?'block':'none'; };
+    // state
+    let showLog=true, debug=false;
+    let dataLog=[], autoStarted=false, lastWeight=0, lastChange=Date.now();
+    const ZERO_MARGIN=0.5, ZERO_COUNT=10, zeroBuf=[];
 
-  // Camera
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }, audio:false
-  });
-  video.srcObject = stream;
+    // UI handlers
+    btnLog.onclick   = ()=>toggleView(true);
+    btnGraph.onclick = ()=>toggleView(false);
+    btnDebug.onclick = ()=>{ debug=!debug; debugEl.style.display = debug?'block':'none'; };
+    btnCSV.onclick   = ()=>downloadCSV();
 
-  // Segment definitions (normalized to a single digit cell)
-  const segDefs = {
-    a:{x:0.18,y:0.02,w:0.64,h:0.12},
-    b:{x:0.82,y:0.18,w:0.12,h:0.32},
-    c:{x:0.82,y:0.54,w:0.12,h:0.32},
-    d:{x:0.18,y:0.88,w:0.64,h:0.12},
-    e:{x:0.06,y:0.54,w:0.12,h:0.32},
-    f:{x:0.06,y:0.18,w:0.12,h:0.32},
-    g:{x:0.18,y:0.45,w:0.64,h:0.10}
-  };
-  const digitToSegments = {
-    0:['a','b','c','d','e','f'],
-    1:['b','c'],
-    2:['a','b','g','e','d'],
-    3:['a','b','g','c','d'],
-    4:['f','g','b','c'],
-    5:['a','f','g','c','d'],
-    6:['a','f','g','e','c','d'],
-    7:['a','b','c'],
-    8:['a','b','c','d','e','f','g'],
-    9:['a','b','c','d','f','g']
-  };
-
-  function recognize7Seg(imData,w,h) {
-    // threshold into binary
-    const d = imData.data;
-    for(let i=0;i<d.length;i+=4){
-      const m=(d[i]+d[i+1]+d[i+2])/3;
-      const b = m>128?255:0;
-      d[i]=d[i+1]=d[i+2]=b;
+    function toggleView(l){
+      showLog=l;
+      logEl.classList.toggle('active', l);
+      graphEl.classList.toggle('active', !l);
+      if(!l) drawGraph();
     }
-    // how many digits? assume 3
-    const DIG=3, dw=w/DIG, dh=h;
-    const results = [];
-    for(let i=0;i<DIG;i++){
-      // build mask
-      const mask = {};
-      for(const [seg,def] of Object.entries(segDefs)){
-        // compute region in pix coords
-        const rx = Math.floor((i + def.x)*dw),
-              ry = Math.floor(def.y*dh),
-              rw = Math.ceil(def.w*dw),
-              rh = Math.ceil(def.h*dh);
-        // sample mean
-        let sum=0, cnt=0;
-        for(let yy=ry;yy<ry+rh;yy++){
-          for(let xx=rx;xx<rx+rw;xx++){
-            const idx = (yy*w+xx)*4;
-            if(d[idx]>128) sum++;
-            cnt++;
+    function drawGraph(){
+      graphEl.width = innerWidth;
+      graphEl.height= innerHeight*0.4;
+      gctx.clearRect(0,0,graphEl.width,graphEl.height);
+      const now=Date.now(),
+            recent = dataLog.filter(d=>now-d.time<=60000);
+      if(recent.length<2) return;
+      const t0=recent[0].time, t1=recent[recent.length-1].time;
+      const w0=Math.min(...recent.map(d=>d.weight)),
+            w1=Math.max(...recent.map(d=>d.weight));
+      gctx.beginPath();
+      recent.forEach((d,i)=>{
+        const x = ((d.time-t0)/(t1-t0))*graphEl.width;
+        const y = graphEl.height - ((d.weight-w0)/(w1-w0))*graphEl.height;
+        i?gctx.lineTo(x,y):gctx.moveTo(x,y);
+      });
+      gctx.strokeStyle='lime'; gctx.lineWidth=2; gctx.stroke();
+    }
+    function logWeight(w){
+      const now=Date.now();
+      if(dataLog.length){
+        const dt=(now-dataLog[dataLog.length-1].time)/1000;
+        const dr=(w-dataLog[dataLog.length-1].weight)/dt;
+        logEl.innerText += `\n${w} g @ ${dr.toFixed(2)} g/s`;
+      } else logEl.innerText = `${w} g`;
+      dataLog.push({weight:w,time:now});
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function downloadCSV(){
+      const csv = 'time,weight\n'+dataLog.map(d=>`${new Date(d.time).toISOString()},${d.weight}`).join('\n');
+      const blob = new Blob([csv],{type:'text/csv'}), url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='data.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // 7-seg defs
+    const segDefs = {
+      a:{x:0.18,y:0.02,w:0.64,h:0.12},
+      b:{x:0.82,y:0.18,w:0.12,h:0.32},
+      c:{x:0.82,y:0.54,w:0.12,h:0.32},
+      d:{x:0.18,y:0.88,w:0.64,h:0.12},
+      e:{x:0.06,y:0.54,w:0.12,h:0.32},
+      f:{x:0.06,y:0.18,w:0.12,h:0.32},
+      g:{x:0.18,y:0.45,w:0.64,h:0.10}
+    };
+    const digitMap = {
+      0:['a','b','c','d','e','f'],
+      1:['b','c'],
+      2:['a','b','g','e','d'],
+      3:['a','b','g','c','d'],
+      4:['f','g','b','c'],
+      5:['a','f','g','c','d'],
+      6:['a','f','g','e','c','d'],
+      7:['a','b','c'],
+      8:['a','b','c','d','e','f','g'],
+      9:['a','b','c','d','f','g']
+    };
+
+    // extract individual digit contours
+    function extractDigitRegions(binIm, w, h){
+      const src = cv.matFromImageData(binIm);
+      const gray = new cv.Mat(), thresh = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.threshold(gray, thresh, 128,255,cv.THRESH_BINARY);
+      const contours = new cv.MatVector(), hierarchy = new cv.Mat();
+      cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      const boxes = [];
+      for(let i=0;i<contours.size();i++){
+        const cnt = contours.get(i);
+        const r = cv.boundingRect(cnt);
+        const ar = r.width/r.height, area=r.width*r.height;
+        if(area>1000 && ar>0.3 && ar<1.2){
+          const canvas = document.createElement('canvas');
+          canvas.width=r.width; canvas.height=r.height;
+          const dctx = canvas.getContext('2d');
+          dctx.putImageData(binIm, -r.x, -r.y);
+          boxes.push({x:r.x,y:r.y,w:r.width,h:r.height,im:canvas.getContext('2d').getImageData(0,0,r.width,r.height)});
+        }
+      }
+      src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+      boxes.sort((a,b)=>a.x-b.x);
+      return boxes;
+    }
+
+    // recognize one digit from its ImageData
+    function recognize7Seg(im, w, h){
+      const d=im.data;
+      for(let i=0;i<d.length;i+=4){
+        const m=(d[i]+d[i+1]+d[i+2])/3;
+        d[i]=d[i+1]=d[i+2]=m>128?255:0;
+      }
+      const mask={};
+      for(const [s,def] of Object.entries(segDefs)){
+        const rx=Math.floor(def.x*w),
+              ry=Math.floor(def.y*h),
+              rw=Math.ceil(def.w*w),
+              rh=Math.ceil(def.h*h);
+        let on=0,tot=0;
+        for(let y=ry;y<ry+rh;y++){
+          for(let x=rx;x<rx+rw;x++){
+            const idx=(y*w+x)*4;
+            if(d[idx]>128) on++;
+            tot++;
           }
         }
-        mask[seg] = (sum/cnt) > 0.5;
+        mask[s] = on/tot>0.5;
       }
-      // find matching digit
-      let found = null;
-      for(let dig=0;dig<=9;dig++){
-        const segs = digitToSegments[dig];
-        const ok = segs.every(s=>mask[s]) &&
-                   Object.keys(mask).filter(s=>mask[s]).length===segs.length;
-        if(ok){ found=dig; break; }
+      for(let digit=0;digit<=9;digit++){
+        const segs = digitMap[digit];
+        if(segs.every(s=>mask[s]) &&
+           Object.keys(mask).filter(s=>mask[s]).length===segs.length){
+          return digit;
+        }
       }
-      results.push(found===null? null : found);
+      return 0;
     }
-    // concatenate, drop leading nulls
-    while(results[0]===null) results.shift();
-    return results.length? parseInt(results.join(''),10) : 0;
-  }
 
-  function drawGraph(){
-    graph.width = window.innerWidth;
-    graph.height= window.innerHeight*0.4;
-    gctx.clearRect(0,0,graph.width,graph.height);
-    const now = Date.now();
-    const recent = dataLog.filter(d=>now-d.time<=60000);
-    if(recent.length<2) return;
-    const t0=recent[0].time, t1=recent[recent.length-1].time;
-    const w0=Math.min(...recent.map(d=>d.weight)), w1=Math.max(...recent.map(d=>d.weight));
-    gctx.beginPath();
-    recent.forEach((d,i)=>{
-      const x = ((d.time-t0)/(t1-t0))*graph.width;
-      const y = graph.height - ((d.weight-w0)/(w1-w0))*graph.height;
-      i?gctx.lineTo(x,y):gctx.moveTo(x,y);
-    });
-    gctx.strokeStyle='lime'; gctx.lineWidth=2; gctx.stroke();
-  }
-
-  function logWeight(w){
-    const now = Date.now();
-    if(dataLog.length){
-      const dt = (now-dataLog[dataLog.length-1].time)/1000;
-      const dr = (w-dataLog[dataLog.length-1].weight)/dt;
-      logEl.innerText += `\n${w} g @ ${dr.toFixed(2)} g/s`;
-    } else {
-      logEl.innerText = `${w} g`;
+    // init OpenCV mats
+    let src, gray, thresh, contours, hierarchy;
+    function initMats(){
+      const w=video.videoWidth, h=video.videoHeight;
+      src    = new cv.Mat(h,w,cv.CV_8UC4);
+      gray   = new cv.Mat(h,w,cv.CV_8UC1);
+      thresh = new cv.Mat(h,w,cv.CV_8UC1);
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
     }
-    dataLog.push({weight:w, time:now});
-    logEl.scrollTop = logEl.scrollHeight;
-  }
 
-  // main loop
-  setInterval(()=>{
-    if(video.readyState<2) return;
-    // draw to proc
-    const vw=video.videoWidth, vh=video.videoHeight;
-    proc.width=vw; proc.height=vh;
-    pctx.drawImage(video,0,0,vw,vh);
+    // locate display box
+    function findDisplay(){
+      pctx.drawImage(video,0,0,proc.width=video.videoWidth,proc.height=video.videoHeight);
+      src.data.set(pctx.getImageData(0,0,proc.width,proc.height).data);
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.threshold(gray, thresh, 0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+      cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      let best=null, bestArea=0;
+      for(let i=0;i<contours.size();i++){
+        const cnt=contours.get(i);
+        const r=cv.boundingRect(cnt);
+        const ar=r.width/r.height, area=r.width*r.height;
+        if(ar>3&&ar<10&&area>5000&&area>bestArea){
+          bestArea=area; best=r;
+        }
+      }
+      return best;
+    }
 
-    // crop ROI
-    const rx=vw*0.2, ry=vh*0.42, rw=vw*0.6, rh=vh*0.16;
-    const frame = pctx.getImageData(rx,ry,rw,rh);
-    // binary & segment OCR
-    const weight = recognize7Seg(frame, rw, rh);
+    // main render loop
+    function render(){
+      if(video.readyState<2){ requestAnimationFrame(render); return; }
+      if(!src) initMats();
 
-    if(debug) console.log('7seg→',weight);
-    currentEl.textContent = weight + ' g';
+      const box = findDisplay();
+      ovCtx.clearRect(0,0,overlay.width=innerWidth,overlay.height=innerHeight);
+      let weight=0;
+      if(box){
+        // draw box
+        const sx=innerWidth/video.videoWidth, sy=innerHeight/video.videoHeight;
+        ovCtx.strokeStyle='cyan'; ovCtx.lineWidth=3;
+        ovCtx.strokeRect(box.x*sx, box.y*sy, box.width*sx, box.height*sy);
 
-    // auto-start
-    const now = Date.now();
-    if(!autoStarted){
-      if(weight<=ZERO_MARGIN) zeroBuf.push(now);
-      else if(zeroBuf.length>=ZERO_COUNT){
-        autoStarted = true;
-        dataLog = [];
-        logEl.innerText = '[Auto-start]';
-        lastChange = now;
+        // get ROI pixels
+        const im = pctx.getImageData(box.x,box.y,box.width,box.height);
+        // extract digit regions
+        const regs = extractDigitRegions(im,box.width,box.height);
+        // recognize each and join
+        weight = parseInt(regs.map(r=>recognize7Seg(r.im,r.w,r.h)).join(''),10) || 0;
+      }
+
+      // update
+      currentEl.textContent = weight + ' g';
+      const now=Date.now();
+      if(!autoStarted){
+        if(weight<=ZERO_MARGIN) zeroBuf.push(now);
+        else if(zeroBuf.length>=ZERO_COUNT){
+          autoStarted=true; dataLog=[]; logEl.innerText='[Auto-start]'; lastChange=now; logWeight(weight);
+        }
+        if(zeroBuf.length>ZERO_COUNT) zeroBuf.shift();
+      } else {
         logWeight(weight);
+        if(Math.abs(weight-lastWeight)>0.2) lastChange=now;
+        if(now-lastChange>10000){
+          autoStarted=false; zeroBuf.length=0; logEl.innerText+='\n[Reset]';
+        }
       }
-      if(zeroBuf.length>ZERO_COUNT) zeroBuf.shift();
-    } else {
-      logWeight(weight);
-      if(Math.abs(weight-lastWeight)>0.2) lastChange = now;
-      if(now-lastChange>10000){
-        autoStarted = false;
-        zeroBuf = [];
-        logEl.innerText += '\n[Reset]';
-      }
+      lastWeight=weight;
+      if(showLog) logEl.scrollTop=logEl.scrollHeight;
+      requestAnimationFrame(render);
     }
-    lastWeight = weight;
-    if(showLog) logEl.scrollTop = logEl.scrollHeight;
 
-  }, 300);
-
-})();
-</script>
+    requestAnimationFrame(render);
+  })();
+  </script>
 </body>
 </html>
