@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Scale Reader</title>
+    <title>Sbal Brid</title>
     <style>
         body {
             margin: 0;
@@ -161,7 +161,7 @@
             const detectionInterval = 5000; // Redetect every 5 seconds
             const processingResolution = { width: 320, height: 240 };
 
-            // Request camera access immediately
+            // Request camera access
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment' }
@@ -228,7 +228,7 @@
                 URL.revokeObjectURL(url);
             });
 
-            // Preprocess image: grayscale and threshold
+            // Preprocess image: grayscale, threshold, and invert
             function preprocessImage() {
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const data = imageData.data;
@@ -239,18 +239,24 @@
                     data[i + 1] = avg;
                     data[i + 2] = avg;
                 }
-                // Threshold (simple fixed threshold)
-                const threshold = 128;
+                // Threshold
+                const threshold = 128; // Adjust based on lighting conditions
                 for (let i = 0; i < data.length; i += 4) {
                     const val = data[i] > threshold ? 255 : 0;
                     data[i] = val;
                     data[i + 1] = val;
                     data[i + 2] = val;
                 }
+                // Invert colors if digits are brighter than background
+                for (let i = 0; i < data.length; i += 4) {
+                    data[i] = 255 - data[i];
+                    data[i + 1] = 255 - data[i + 1];
+                    data[i + 2] = 255 - data[i + 2];
+                }
                 ctx.putImageData(imageData, 0, 0);
             }
 
-            // Recognize digits
+            // Recognize digits with improved OCR settings
             async function recognizeDigits() {
                 const now = Date.now();
                 let imageToRecognize = canvas;
@@ -271,7 +277,9 @@
                     debugCtx.drawImage(imageToRecognize, 0, 0, debugCanvas.width, debugCanvas.height);
                 }
                 const { data } = await worker.recognize(imageToRecognize);
-                const text = data.text.trim();
+                let text = data.text.trim();
+                // Filter out non-digit characters except for units
+                text = text.replace(/[^0-9]/g, '');
                 if (text && /^\d+$/.test(text)) {
                     if (!bbox || now - lastDetectionTime >= detectionInterval) {
                         // Update bounding box
