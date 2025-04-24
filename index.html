@@ -2,211 +2,217 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Espresso Scale Logger</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Espresso Scale Logger (7-Seg OCR)</title>
   <style>
-    html, body { margin:0; padding:0; overflow:hidden; background:#000; color:#fff;
-      font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
-    video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
-    /* overlayCanvas sits above video to draw boxes/text */
-    #overlayCanvas { z-index:2; pointer-events:none; }
-    .ui { position:absolute; top:10px; left:10px; z-index:4; display:flex; gap:8px; }
-    .ui button { padding:6px 12px; background:rgba(255,255,255,0.1); border:none; border-radius:6px; color:#fff; }
-    #current { position:absolute; top:50%; width:100%; text-align:center; transform:translateY(-50%); font-size:3em; z-index:3; }
-    .log, .graph { position:absolute; bottom:0; width:100%; max-height:40%; background:rgba(0,0,0,0.7);
-      overflow-y:auto; font-size:14px; padding:10px; display:none; z-index:3; }
-    .log.active, .graph.active { display:block !important; }
-    .roi { position:absolute; border:2px dashed #0f0; box-sizing:border-box;
-      width:60%; height:15%; top:42.5%; left:20%; z-index:1; pointer-events:none; }
-    #debug { position:absolute; top:10px; right:10px; background:#f00; padding:4px 8px;
-      font-size:12px; display:none; z-index:4; color:#fff; }
+    html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;
+      font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
+    video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+    .overlay{position:absolute;inset:0;backdrop-filter:brightness(0.8);pointer-events:none;}
+    .ui{position:absolute;top:10px;left:10px;z-index:3;display:flex;gap:8px;}
+    .ui button{padding:6px 12px;background:rgba(255,255,255,0.1);border:none;border-radius:6px;color:#fff;}
+    #current{position:absolute;top:50%;width:100%;text-align:center;transform:translateY(-50%);
+      font-size:3em;z-index:2;pointer-events:none;}
+    .log,.graph{position:absolute;bottom:0;width:100%;max-height:40%;background:rgba(0,0,0,0.7);
+      overflow-y:auto;font-size:14px;padding:10px;display:none;z-index:2;}
+    .log.active,.graph.active{display:block!important;}
+    .roi{position:absolute;border:2px dashed #0f0;box-sizing:border-box;
+      width:60%;height:15%;top:42.5%;left:20%;z-index:1;pointer-events:none;}
+    #debug{position:absolute;top:10px;right:10px;background:#f00;padding:4px 8px;
+      font-size:12px;display:none;z-index:3;color:#fff;}
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline></video>
-  <canvas id="procCanvas" style="display:none"></canvas>
-  <canvas id="roiCanvas" style="display:none"></canvas>
-  <canvas id="overlayCanvas"></canvas>
-  <div id="current">–.– g</div>
+  <canvas id="proc" style="display:none"></canvas>
+  <canvas id="roi" style="display:none"></canvas>
+  <div class="overlay"></div>
+  <div id="current">– g</div>
   <div class="ui">
     <button id="btnLog">Log</button>
     <button id="btnGraph">Graph</button>
     <button id="btnDebug">Debug</button>
-    <button id="btnPreproc">Preproc Off</button>
   </div>
   <div id="log" class="log active"></div>
   <canvas id="graph" class="graph"></canvas>
   <div class="roi"></div>
   <div id="debug">DEBUG</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
-  <script>
-  (async () => {
-    // DOM refs
-    const video = document.getElementById('video');
-    const procCanvas = document.getElementById('procCanvas');
-    const procCtx    = procCanvas.getContext('2d');
-    const roiCanvas  = document.getElementById('roiCanvas');
-    const roiCtx     = roiCanvas.getContext('2d');
-    const overlay    = document.getElementById('overlayCanvas');
-    const ovCtx      = overlay.getContext('2d');
-    const currentEl  = document.getElementById('current');
-    const logEl      = document.getElementById('log');
-    const graphEl    = document.getElementById('graph');
-    const graphCtx   = graphEl.getContext('2d');
-    const debugEl    = document.getElementById('debug');
-    const btnLog     = document.getElementById('btnLog');
-    const btnGraph   = document.getElementById('btnGraph');
-    const btnDebug   = document.getElementById('btnDebug');
-    const btnPreproc = document.getElementById('btnPreproc');
+<script>
+(async()=> {
+  // DOM
+  const video = document.getElementById('video');
+  const proc  = document.getElementById('proc'), pctx = proc.getContext('2d');
+  const roi   = document.getElementById('roi'),  rctx = roi.getContext('2d');
+  const currentEl = document.getElementById('current');
+  const logEl     = document.getElementById('log');
+  const graph     = document.getElementById('graph'), gctx = graph.getContext('2d');
+  const btnLog    = document.getElementById('btnLog');
+  const btnGraph  = document.getElementById('btnGraph');
+  const btnDebug  = document.getElementById('btnDebug');
+  const debugEl   = document.getElementById('debug');
 
-    // state
-    let showLog = true, debug=false, preprocess=false;
-    let worker, workerReady=false, ocrBusy=false;
-    let dataLog=[], zeroBuf=[], autoStarted=false;
-    const ZERO_COUNT=10, ZERO_MARGIN=0.5;
-    let lastWeight=0, lastChange=Date.now();
+  // State
+  let showLog=true, debug=false;
+  let dataLog=[], lastWeight=0, lastChange=Date.now();
+  let zeroBuf=[], autoStarted=false;
+  const ZERO_COUNT=10, ZERO_MARGIN=0.5;
 
-    // initialize overlay canvas to fill screen
-    function resizeOverlay(){
-      overlay.width = window.innerWidth;
-      overlay.height= window.innerHeight;
+  // UI toggles
+  btnLog.onclick   = ()=>{ showLog=true; logEl.classList.add('active'); graph.classList.remove('active'); };
+  btnGraph.onclick = ()=>{ showLog=false; graph.classList.add('active'); logEl.classList.remove('active'); drawGraph(); };
+  btnDebug.onclick = ()=>{ debug = !debug; debugEl.style.display = debug?'block':'none'; };
+
+  // Camera
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }, audio:false
+  });
+  video.srcObject = stream;
+
+  // Segment definitions (normalized to a single digit cell)
+  const segDefs = {
+    a:{x:0.18,y:0.02,w:0.64,h:0.12},
+    b:{x:0.82,y:0.18,w:0.12,h:0.32},
+    c:{x:0.82,y:0.54,w:0.12,h:0.32},
+    d:{x:0.18,y:0.88,w:0.64,h:0.12},
+    e:{x:0.06,y:0.54,w:0.12,h:0.32},
+    f:{x:0.06,y:0.18,w:0.12,h:0.32},
+    g:{x:0.18,y:0.45,w:0.64,h:0.10}
+  };
+  const digitToSegments = {
+    0:['a','b','c','d','e','f'],
+    1:['b','c'],
+    2:['a','b','g','e','d'],
+    3:['a','b','g','c','d'],
+    4:['f','g','b','c'],
+    5:['a','f','g','c','d'],
+    6:['a','f','g','e','c','d'],
+    7:['a','b','c'],
+    8:['a','b','c','d','e','f','g'],
+    9:['a','b','c','d','f','g']
+  };
+
+  function recognize7Seg(imData,w,h) {
+    // threshold into binary
+    const d = imData.data;
+    for(let i=0;i<d.length;i+=4){
+      const m=(d[i]+d[i+1]+d[i+2])/3;
+      const b = m>128?255:0;
+      d[i]=d[i+1]=d[i+2]=b;
     }
-    window.addEventListener('resize', resizeOverlay);
-    resizeOverlay();
+    // how many digits? assume 3
+    const DIG=3, dw=w/DIG, dh=h;
+    const results = [];
+    for(let i=0;i<DIG;i++){
+      // build mask
+      const mask = {};
+      for(const [seg,def] of Object.entries(segDefs)){
+        // compute region in pix coords
+        const rx = Math.floor((i + def.x)*dw),
+              ry = Math.floor(def.y*dh),
+              rw = Math.ceil(def.w*dw),
+              rh = Math.ceil(def.h*dh);
+        // sample mean
+        let sum=0, cnt=0;
+        for(let yy=ry;yy<ry+rh;yy++){
+          for(let xx=rx;xx<rx+rw;xx++){
+            const idx = (yy*w+xx)*4;
+            if(d[idx]>128) sum++;
+            cnt++;
+          }
+        }
+        mask[seg] = (sum/cnt) > 0.5;
+      }
+      // find matching digit
+      let found = null;
+      for(let dig=0;dig<=9;dig++){
+        const segs = digitToSegments[dig];
+        const ok = segs.every(s=>mask[s]) &&
+                   Object.keys(mask).filter(s=>mask[s]).length===segs.length;
+        if(ok){ found=dig; break; }
+      }
+      results.push(found===null? null : found);
+    }
+    // concatenate, drop leading nulls
+    while(results[0]===null) results.shift();
+    return results.length? parseInt(results.join(''),10) : 0;
+  }
 
-    // Tesseract worker
-    worker = Tesseract.createWorker({ logger: m => debug && console.log(m) });
-    await worker.load(); await worker.loadLanguage('eng');
-    await worker.initialize('eng');
-    workerReady=true;
-
-    // camera
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} },
-      audio:false
+  function drawGraph(){
+    graph.width = window.innerWidth;
+    graph.height= window.innerHeight*0.4;
+    gctx.clearRect(0,0,graph.width,graph.height);
+    const now = Date.now();
+    const recent = dataLog.filter(d=>now-d.time<=60000);
+    if(recent.length<2) return;
+    const t0=recent[0].time, t1=recent[recent.length-1].time;
+    const w0=Math.min(...recent.map(d=>d.weight)), w1=Math.max(...recent.map(d=>d.weight));
+    gctx.beginPath();
+    recent.forEach((d,i)=>{
+      const x = ((d.time-t0)/(t1-t0))*graph.width;
+      const y = graph.height - ((d.weight-w0)/(w1-w0))*graph.height;
+      i?gctx.lineTo(x,y):gctx.moveTo(x,y);
     });
-    video.srcObject = stream;
+    gctx.strokeStyle='lime'; gctx.lineWidth=2; gctx.stroke();
+  }
 
-    // UI
-    btnLog.onclick   = ()=> toggleView(true);
-    btnGraph.onclick = ()=> toggleView(false);
-    btnDebug.onclick = ()=>{
-      debug = !debug;
-      debugEl.style.display = debug?'block':'none';
-    };
-    btnPreproc.onclick = ()=>{
-      preprocess = !preprocess;
-      btnPreproc.textContent = preprocess?'Preproc On':'Preproc Off';
-    };
-    function toggleView(toLog){
-      showLog=toLog;
-      logEl.classList.toggle('active',toLog);
-      graphEl.classList.toggle('active',!toLog);
-      if(!toLog) drawGraph();
+  function logWeight(w){
+    const now = Date.now();
+    if(dataLog.length){
+      const dt = (now-dataLog[dataLog.length-1].time)/1000;
+      const dr = (w-dataLog[dataLog.length-1].weight)/dt;
+      logEl.innerText += `\n${w} g @ ${dr.toFixed(2)} g/s`;
+    } else {
+      logEl.innerText = `${w} g`;
     }
+    dataLog.push({weight:w, time:now});
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 
-    // graph & logging
-    function drawGraph(){
-      graphEl.width = window.innerWidth;
-      graphEl.height= window.innerHeight*0.4;
-      graphCtx.clearRect(0,0,graphEl.width,graphEl.height);
-      const now=Date.now(), recent=dataLog.filter(d=>now-d.time<=60000);
-      if(recent.length<2) return;
-      const t0=recent[0].time, t1=recent.pop().time;
-      const w0=Math.min(...recent.map(d=>d.weight)), w1=Math.max(...recent.map(d=>d.weight));
-      graphCtx.beginPath();
-      recent.forEach((d,i)=>{
-        const x=((d.time-t0)/(t1-t0))*graphEl.width;
-        const y=graphEl.height-((d.weight-w0)/(w1-w0))*graphEl.height;
-        i?graphCtx.lineTo(x,y):graphCtx.moveTo(x,y);
-      });
-      graphCtx.strokeStyle='lime'; graphCtx.lineWidth=2; graphCtx.stroke();
+  // main loop
+  setInterval(()=>{
+    if(video.readyState<2) return;
+    // draw to proc
+    const vw=video.videoWidth, vh=video.videoHeight;
+    proc.width=vw; proc.height=vh;
+    pctx.drawImage(video,0,0,vw,vh);
+
+    // crop ROI
+    const rx=vw*0.2, ry=vh*0.42, rw=vw*0.6, rh=vh*0.16;
+    const frame = pctx.getImageData(rx,ry,rw,rh);
+    // binary & segment OCR
+    const weight = recognize7Seg(frame, rw, rh);
+
+    if(debug) console.log('7seg→',weight);
+    currentEl.textContent = weight + ' g';
+
+    // auto-start
+    const now = Date.now();
+    if(!autoStarted){
+      if(weight<=ZERO_MARGIN) zeroBuf.push(now);
+      else if(zeroBuf.length>=ZERO_COUNT){
+        autoStarted = true;
+        dataLog = [];
+        logEl.innerText = '[Auto-start]';
+        lastChange = now;
+        logWeight(weight);
+      }
+      if(zeroBuf.length>ZERO_COUNT) zeroBuf.shift();
+    } else {
+      logWeight(weight);
+      if(Math.abs(weight-lastWeight)>0.2) lastChange = now;
+      if(now-lastChange>10000){
+        autoStarted = false;
+        zeroBuf = [];
+        logEl.innerText += '\n[Reset]';
+      }
     }
-    function logWeight(w){
-      const now=Date.now();
-      if(dataLog.length){
-        const dt=(now-dataLog[dataLog.length-1].time)/1000;
-        const dr=(w-dataLog[dataLog.length-1].weight)/dt;
-        logEl.innerText+=`\n${w.toFixed(1)} g @ ${dr.toFixed(2)} g/s`;
-      } else {
-        logEl.innerText=`${w.toFixed(1)} g`;
-      }
-      dataLog.push({weight:w,time:now});
-      logEl.scrollTop=logEl.scrollHeight;
-    }
+    lastWeight = weight;
+    if(showLog) logEl.scrollTop = logEl.scrollHeight;
 
-    // main OCR loop
-    setInterval(async ()=>{
-      if(!workerReady||ocrBusy||video.readyState<2) return;
-      ocrBusy=true;
+  }, 300);
 
-      // draw video to proc canvas
-      const vw=video.videoWidth, vh=video.videoHeight;
-      procCanvas.width=vw; procCanvas.height=vh;
-      procCtx.drawImage(video,0,0,vw,vh);
-
-      // define ROI crop
-      const rx=vw*0.2, ry=vh*0.425, rw=vw*0.6, rh=vh*0.15;
-      const frame=procCtx.getImageData(rx,ry,rw,rh);
-      if(preprocess){
-        for(let i=0,d=frame.data;i<d.length;i+=4){
-          const m=(d[i]+d[i+1]+d[i+2])/3;
-          d[i]=d[i+1]=d[i+2]=m>128?255:0;
-        }
-      }
-      // draw to roi canvas
-      roiCanvas.width=rw; roiCanvas.height=rh;
-      roiCtx.putImageData(frame,0,0);
-
-      // OCR
-      const { data } = await worker.recognize(roiCanvas);
-      const words = data.words.filter(w=>/^[0-9.]+$/.test(w.text));
-      let best = words.sort((a,b)=>b.confidence-a.confidence)[0];
-      let num = best ? parseFloat(best.text) : 0;
-
-      // show bounding box & text
-      ovCtx.clearRect(0,0,overlay.width,overlay.height);
-      if(best){
-        // map word bbox back to screen coords
-        const scaleX=overlay.width / vw;
-        const scaleY=overlay.height/ vh;
-        const x = (rx+best.bbox.x0) * scaleX;
-        const y = (ry+best.bbox.y0) * scaleY;
-        const w = (best.bbox.x1-best.bbox.x0) * scaleX;
-        const h = (best.bbox.y1-best.bbox.y0) * scaleY;
-        ovCtx.strokeStyle='cyan'; ovCtx.lineWidth=2;
-        ovCtx.strokeRect(x,y,w,h);
-        ovCtx.font=`${Math.max(16, h*0.6)}px monospace`;
-        ovCtx.fillStyle='cyan';
-        ovCtx.fillText(best.text, x, y-4);
-      }
-
-      // update live weight
-      currentEl.textContent = num.toFixed(1)+' g';
-
-      // auto-start logic
-      const now = Date.now();
-      if(!autoStarted){
-        if(num<=ZERO_MARGIN) zeroBuf.push(now);
-        else if(zeroBuf.length>=ZERO_COUNT){
-          autoStarted=true; dataLog=[]; logEl.innerText='[Auto-start]';
-          lastChange=now; logWeight(num);
-        }
-        if(zeroBuf.length>ZERO_COUNT) zeroBuf.shift();
-      } else {
-        logWeight(num);
-        if(Math.abs(num-lastWeight)>0.2) lastChange=now;
-        if(now-lastChange>10000){
-          autoStarted=false; zeroBuf=[]; logEl.innerText+='\n[Reset]';
-        }
-      }
-      lastWeight = num;
-
-      ocrBusy=false;
-      if(showLog) logEl.scrollTop=logEl.scrollHeight;
-    }, 300);
-  })();
-  </script>
+})();
+</script>
 </body>
 </html>
