@@ -2,191 +2,272 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Espresso Scale Logger</title>
   <style>
-    html, body { margin:0; padding:0; overflow:hidden; background:#000; color:#fff;
-      font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
-    video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
-    .overlay { position:absolute; inset:0; backdrop-filter:brightness(0.8); pointer-events:none; }
-    .ui { position:absolute; top:10px; left:10px; z-index:3; display:flex; gap:8px; }
-    .ui button { padding:6px 12px; background:rgba(255,255,255,0.1); border:none; border-radius:6px; color:#fff; }
-    #current { position:absolute; top:50%; width:100%; text-align:center; transform:translateY(-50%); font-size:3em; z-index:2; pointer-events:none; }
-    .log, .graph { position:absolute; bottom:0; width:100%; max-height:40%; background:rgba(0,0,0,0.7);
-      overflow-y:auto; font-size:14px; padding:10px; display:none; z-index:2; }
-    .log.active, .graph.active { display:block !important; }
-    .roi { position:absolute; border:2px dashed #0f0; box-sizing:border-box;
-      width:60%; height:15%; top:42.5%; left:20%; z-index:2; pointer-events:none; }
-    #debug { position:absolute; top:10px; right:10px; background:#f00; padding:4px 8px;
-      font-size:12px; display:none; z-index:3; color:#fff; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: black;
+      color: white;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      backdrop-filter: blur(8px) brightness(0.8);
+      pointer-events: none;
+    }
+    .ui {
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding: 10px;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      z-index: 2;
+    }
+    .log, .graph {
+      position: absolute;
+      bottom: 0;
+      width: 100%;
+      max-height: 40%;
+      background: rgba(0, 0, 0, 0.7);
+      overflow-y: auto;
+      font-size: 14px;
+      padding: 10px;
+      display: none;
+    }
+    .active {
+      display: block !important;
+    }
+    .roi {
+      position: absolute;
+      border: 2px dashed #0f0;
+      box-sizing: border-box;
+      width: 60%;
+      height: 15%;
+      top: 42.5%;
+      left: 20%;
+      z-index: 2;
+    }
+    .debug-banner {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #f00;
+      color: white;
+      padding: 4px 8px;
+      z-index: 3;
+      font-size: 12px;
+    }
+    button {
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.1);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      margin-left: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
-  <!-- video & hidden canvases -->
   <video id="video" autoplay playsinline></video>
-  <canvas id="procCanvas" style="display:none"></canvas>
-  <canvas id="roiCanvas" style="display:none"></canvas>
+  <canvas id="canvas" style="display:none"></canvas>
   <div class="overlay"></div>
-  <!-- UI -->
-  <div id="current">–.– g</div>
   <div class="ui">
-    <button id="btnLog">Log</button>
-    <button id="btnGraph">Graph</button>
-    <button id="btnDebug">Debug</button>
-    <button id="btnPreproc">Preproc Off</button>
+    <div>
+      <button onclick="toggleView('log')">Log</button>
+      <button onclick="toggleView('graph')">Graph</button>
+      <button onclick="toggleDebug()">Debug</button>
+    </div>
+    <div>
+      <button onclick="togglePreprocess()">Preproc</button>
+    </div>
   </div>
   <div id="log" class="log active"></div>
   <canvas id="graph" class="graph"></canvas>
   <div class="roi"></div>
-  <div id="debug">DEBUG</div>
+  <div id="debug" class="debug-banner" style="display:none">DEBUG</div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
   <script>
-  (async () => {
-    // DOM
     const video = document.getElementById('video');
-    const procCanvas = document.getElementById('procCanvas');
-    const procCtx    = procCanvas.getContext('2d');
-    const roiCanvas  = document.getElementById('roiCanvas');
-    const roiCtx     = roiCanvas.getContext('2d');
-    const currentEl  = document.getElementById('current');
-    const logEl      = document.getElementById('log');
-    const graphEl    = document.getElementById('graph');
-    const graphCtx   = graphEl.getContext('2d');
-    const debugEl    = document.getElementById('debug');
-    const btnLog     = document.getElementById('btnLog');
-    const btnGraph   = document.getElementById('btnGraph');
-    const btnDebug   = document.getElementById('btnDebug');
-    const btnPreproc = document.getElementById('btnPreproc');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const logEl = document.getElementById('log');
+    const graphCanvas = document.getElementById('graph');
+    const graphCtx = graphCanvas.getContext('2d');
+    const debugEl = document.getElementById('debug');
 
-    // State
-    let showLog = true, debug = false, preprocess = false;
-    let workerReady = false, worker;
-    let dataLog = [], ocrBusy = false;
-    let zeroBuffer = [], autoStarted = false;
-    const ZERO_COUNT = 10, ZERO_MARGIN = 0.5; // ~3 s of zeros at 300ms
-    let lastChange = Date.now(), lastWeight = 0;
+    let debug = false;
+    let preprocess = false;
+    let dataLog = [];
+    let ocrInProgress = false;
 
-    // INIT Tesseract worker
-    worker = Tesseract.createWorker({ logger: m => debug && console.log(m) });
-    await worker.load();
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
-    workerReady = true;
+    let weightBuffer = [];
+    let autoStartActive = true;
+    let loggingStarted = false;
+    let lastWeight = 0;
+    let lastChangeTime = Date.now();
 
-    // CAMERA
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:'environment', width:{ideal:1920},height:{ideal:1080} },
-      audio: false
-    });
-    video.srcObject = stream;
+    function toggleView(view) {
+      document.getElementById('log').classList.remove('active');
+      document.getElementById('graph').classList.remove('active');
+      document.getElementById(view).classList.add('active');
+      if (view === 'graph') drawGraph();
+    }
 
-    // UI EVENTS
-    btnLog.onclick   = ()=>toggleView(true);
-    btnGraph.onclick = ()=>toggleView(false);
-    btnDebug.onclick = ()=>{
+    function toggleDebug() {
       debug = !debug;
-      debugEl.style.display = debug ? 'block':'none';
-    };
-    btnPreproc.onclick = ()=>{
+      debugEl.style.display = debug ? 'block' : 'none';
+    }
+
+    function togglePreprocess() {
       preprocess = !preprocess;
-      btnPreproc.textContent = preprocess?'Preproc On':'Preproc Off';
-    };
-
-    function toggleView(toLog){
-      showLog = !!toLog;
-      logEl.classList.toggle('active', showLog);
-      graphEl.classList.toggle('active', !showLog);
-      if(!showLog) drawGraph();
     }
 
-    function drawGraph(){
-      graphEl.width  = window.innerWidth;
-      graphEl.height = window.innerHeight * 0.4;
-      graphCtx.clearRect(0,0,graphEl.width,graphEl.height);
+    function logWeight(weight) {
       const now = Date.now();
-      const recent = dataLog.filter(d=>now-d.time<=60000);
-      if(recent.length<2) return;
-      const t0 = recent[0].time, t1 = recent[recent.length-1].time;
-      const w0 = Math.min(...recent.map(d=>d.weight)), w1 = Math.max(...recent.map(d=>d.weight));
-      graphCtx.beginPath();
-      recent.forEach((d,i)=>{
-        const x = ((d.time-t0)/(t1-t0))*graphEl.width;
-        const y = graphEl.height - ((d.weight-w0)/(w1-w0))*graphEl.height;
-        i?graphCtx.lineTo(x,y):graphCtx.moveTo(x,y);
-      });
-      graphCtx.strokeStyle='lime';graphCtx.lineWidth=2;graphCtx.stroke();
-    }
+      if (!loggingStarted) return;
 
-    function logWeight(w){
-      const now = Date.now();
-      if(dataLog.length){
-        const dt = (now-dataLog[dataLog.length-1].time)/1000;
-        const dr = (w-dataLog[dataLog.length-1].weight)/dt;
-        logEl.innerText += `\n${w.toFixed(1)} g @ ${dr.toFixed(2)} g/s`;
+      if (dataLog.length > 0) {
+        const dt = (now - dataLog[dataLog.length - 1].time) / 1000;
+        const dWeight = weight - dataLog[dataLog.length - 1].weight;
+        const rate = (dWeight / dt).toFixed(2);
+        logEl.innerText += `\n${weight} g @ ${rate} g/s`;
       } else {
-        logEl.innerText += `\n${w.toFixed(1)} g`;
+        logEl.innerText += `\n${weight} g`;
       }
-      dataLog.push({weight:w,time:now});
+      dataLog.push({ weight, time: now });
       logEl.scrollTop = logEl.scrollHeight;
     }
 
-    // MAIN LOOP
-    setInterval(async ()=>{
-      if(!workerReady||ocrBusy||video.readyState<2) return;
-      ocrBusy = true;
+    function drawGraph() {
+      graphCanvas.width = window.innerWidth;
+      graphCanvas.height = window.innerHeight * 0.4;
+      graphCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
 
-      // Setup canvases
-      const vw=video.videoWidth, vh=video.videoHeight;
-      procCanvas.width = vw; procCanvas.height = vh;
-      roiCanvas.width  = vw*0.6; roiCanvas.height = vh*0.15;
-      // Draw frame & extract ROI
-      procCtx.drawImage(video,0,0,vw,vh);
-      const rx = vw*0.2, ry = vh*0.425, rw = vw*0.6, rh = vh*0.15;
-      const frame = procCtx.getImageData(rx,ry,rw,rh);
-      // Preprocess?
-      if(preprocess){
-        for(let i=0, d=frame.data;i<d.length;i+=4){
-          const m=(d[i]+d[i+1]+d[i+2])/3;
-          d[i]=d[i+1]=d[i+2]=m>128?255:0;
-        }
-      }
-      roiCtx.putImageData(frame,0,0);
-
-      // OCR
-      const { data:{text} } = await worker.recognize(roiCanvas);
-      const num = parseFloat(text.replace(/[^0-9.]/g,''))||0;
-
-      // Update live read
-      currentEl.textContent = num.toFixed(1)+' g';
-
-      // Auto-start logic
       const now = Date.now();
-      if(!autoStarted){
-        if(num<=ZERO_MARGIN){
-          zeroBuffer.push(now);
-          if(zeroBuffer.length>ZERO_COUNT) zeroBuffer.shift();
-        } else if(zeroBuffer.length>=ZERO_COUNT){
-          autoStarted = true;
-          dataLog=[]; logEl.innerText = '[Auto-start]';
-          lastChange = now; logWeight(num);
+      const recent = dataLog.filter(d => now - d.time <= 60000);
+      if (recent.length < 2) return;
+
+      const minTime = recent[0].time;
+      const maxTime = recent[recent.length - 1].time;
+      const minWeight = Math.min(...recent.map(d => d.weight));
+      const maxWeight = Math.max(...recent.map(d => d.weight));
+
+      graphCtx.beginPath();
+      recent.forEach((d, i) => {
+        const x = ((d.time - minTime) / (maxTime - minTime)) * graphCanvas.width;
+        const y = graphCanvas.height - ((d.weight - minWeight) / (maxWeight - minWeight)) * graphCanvas.height;
+        if (i === 0) graphCtx.moveTo(x, y);
+        else graphCtx.lineTo(x, y);
+      });
+      graphCtx.strokeStyle = 'lime';
+      graphCtx.lineWidth = 2;
+      graphCtx.stroke();
+    }
+
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+    }
+
+    async function captureAndRead() {
+      if (ocrInProgress) return;
+      ocrInProgress = true;
+      try {
+        const w = canvas.width = video.videoWidth;
+        const h = canvas.height = video.videoHeight;
+        const roi = { x: w * 0.2, y: h * 0.425, width: w * 0.6, height: h * 0.15 };
+
+        ctx.drawImage(video, 0, 0, w, h);
+        let imageData = ctx.getImageData(roi.x, roi.y, roi.width, roi.height);
+
+        if (preprocess) {
+          const data = imageData.data;
+          for (let i = 0; i < data.length; i += 4) {
+            const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            data[i] = data[i + 1] = data[i + 2] = avg > 128 ? 255 : 0;
+          }
+          ctx.putImageData(imageData, roi.x, roi.y);
         }
-      } else {
-        // log continuously
-        logWeight(num);
-        // reset if long idle
-        if(Math.abs(num-lastWeight)>0.2) lastChange=now;
-        if(now-lastChange>10000){
-          autoStarted=false; zeroBuffer=[]; logEl.innerText+='\n[Reset]';
+
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = roi.width;
+        croppedCanvas.height = roi.height;
+        const croppedCtx = croppedCanvas.getContext('2d');
+        croppedCtx.putImageData(ctx.getImageData(roi.x, roi.y, roi.width, roi.height), 0, 0);
+
+        const result = await Tesseract.recognize(croppedCanvas, 'eng', {
+          tessedit_char_whitelist: '0123456789.',
+        });
+
+        const text = result.data.text.replace(/[^0-9.]/g, '').trim();
+        const weight = parseFloat(text);
+        if (isNaN(weight)) return;
+
+        // Auto-start logic
+        const now = Date.now();
+        weightBuffer.push({ time: now, weight });
+        if (weightBuffer.length > 20) weightBuffer.shift();
+
+        const recent = weightBuffer.filter(e => now - e.time <= 2000);
+        const avgRecent = recent.reduce((a, b) => a + b.weight, 0) / recent.length;
+
+        if (autoStartActive && !loggingStarted && avgRecent < 0.1 && weight > 0.2) {
+          loggingStarted = true;
+          logEl.innerText += "\n[Auto-start logging]";
+          dataLog = [];
         }
+
+        if (loggingStarted) logWeight(weight);
+
+        if (Math.abs(weight - lastWeight) > 0.1) {
+          lastChangeTime = now;
+        }
+        if (loggingStarted && now - lastChangeTime > 10000) {
+          logEl.innerText += "\n[Reset to waiting]";
+          loggingStarted = false;
+          autoStartActive = true;
+          weightBuffer = [];
+        }
+
+        lastWeight = weight;
+      } catch (e) {
+        console.error('OCR Error:', e);
       }
-      lastWeight = num;
+      ocrInProgress = false;
+    }
 
-      ocrBusy = false;
-      if(showLog) logEl.scrollTop = logEl.scrollHeight;
-    }, 300);
+    setInterval(() => {
+      if (video.readyState >= 2) captureAndRead();
+    }, 500);
 
-  })();
+    startCamera();
   </script>
 </body>
 </html>
