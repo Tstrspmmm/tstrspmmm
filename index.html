@@ -1,235 +1,383 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Espresso Scale Logger</title>
-  <style>
-    html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;
-      font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
-    video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
-    #overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2;}
-    #current{position:absolute;top:50%;width:100%;text-align:center;
-      transform:translateY(-50%);font-size:3em;z-index:3;pointer-events:none;}
-    .ui{position:absolute;top:10px;left:10px;z-index:4;display:flex;gap:8px;}
-    .ui button{padding:6px 12px;background:rgba(255,255,255,0.1);border:none;
-      border-radius:6px;color:#fff;font-size:14px;}
-    .log,.graph{position:absolute;bottom:0;width:100%;max-height:40%;
-      background:rgba(0,0,0,0.7);overflow-y:auto;font-size:14px;padding:10px;
-      display:none;z-index:3;}
-    .log.active,.graph.active{display:block!important;}
-    #debug{position:absolute;top:10px;right:10px;background:#f00;padding:4px 8px;
-      font-size:12px;display:none;z-index:4;color:#fff;}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Scale Reader</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #video-container {
+            position: relative;
+            width: 100vw;
+            height: 56.25vw; /* 16:9 aspect ratio */
+            max-width: 100%;
+            max-height: 56.25vw;
+            background-color: black;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #bounding-box {
+            position: absolute;
+            border: 2px solid lime;
+            box-sizing: border-box;
+        }
+        #reading {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.5);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 24px;
+            font-weight: bold;
+            color: black;
+        }
+        #debug-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.5;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background-color: rgba(255, 255, 255, 0.5);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            border: none;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #log-container {
+            width: 100vw;
+            height: calc(100vh - 56.25vw - 20px);
+            overflow: auto;
+            background-color: rgba(255, 255, 255, 0.5);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        #log-text {
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+        #graph-canvas {
+            width: 100%;
+            height: 100%;
+        }
+        #status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.5);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
-  <canvas id="proc" style="display:none"></canvas>
-  <canvas id="overlay"></canvas>
-  <div id="current">– g</div>
+    <div id="video-container">
+        <video id="video" playsinline autoplay muted></video>
+        <div id="overlay">
+            <div id="bounding-box"></div>
+            <div id="reading"></div>
+            <canvas id="debug-canvas" width="320" height="240" style="display: none;"></canvas>
+        </div>
+    </div>
+    <div id="controls">
+        <button id="toggle-debug">Toggle Debug</button>
+        <button id="toggle-log">Switch to Graph</button>
+        <button id="export-csv">Export CSV</button>
+    </div>
+    <div id="log-container">
+        <div id="log-text"></div>
+        <canvas id="graph-canvas" style="display: none;"></canvas>
+    </div>
+    <div id="status">Initializing...</div>
 
-  <div class="ui">
-    <button id="btnLog">Log</button>
-    <button id="btnGraph">Graph</button>
-    <button id="btnDebug">Debug</button>
-    <button id="btnCSV">Export CSV</button>
-  </div>
+    <script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
+    <script>
+        (async function() {
+            const video = document.getElementById('video');
+            const canvas = document.createElement('canvas');
+            const debugCanvas = document.getElementById('debug-canvas');
+            const boundingBox = document.getElementById('bounding-box');
+            const readingDiv = document.getElementById('reading');
+            const logText = document.getElementById('log-text');
+            const graphCanvas = document.getElementById('graph-canvas');
+            const statusDiv = document.getElementById('status');
+            const toggleDebugBtn = document.getElementById('toggle-debug');
+            const toggleLogBtn = document.getElementById('toggle-log');
+            const exportCsvBtn = document.getElementById('export-csv');
 
-  <div id="log" class="log active"></div>
-  <canvas id="graph" class="graph"></canvas>
-  <div id="debug">DEBUG</div>
+            let debugMode = false;
+            let logMode = 'text'; // 'text' or 'graph'
+            let logging = false;
+            let zeroStartTime = null;
+            let lastWeight = null;
+            let loggedData = [];
+            let bbox = null;
+            let lastDetectionTime = 0;
+            const detectionInterval = 5000; // Redetect every 5 seconds
+            const processingResolution = { width: 320, height: 240 };
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
-  <script>
-  (async()=> {
-    // 1. CAMERA SETUP (prompt immediately)
-    const video = document.getElementById('video');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode:'environment', width:{ideal:1280}, height:{ideal:720} },
-        audio: false
-      });
-      video.srcObject = stream;
-      await video.play();
-    } catch (err) {
-      alert('Camera access required.');
-      console.error(err);
-      return;
-    }
+            // Request camera access immediately
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+                video.srcObject = stream;
+                statusDiv.textContent = 'Camera accessed. Detecting display...';
+            } catch (err) {
+                statusDiv.textContent = 'Camera access denied. Please allow camera access.';
+                return;
+            }
 
-    // 2. CANVASES & UI REFS
-    const proc    = document.getElementById('proc');
-    const pctx    = proc.getContext('2d');
-    const overlay = document.getElementById('overlay');
-    const octx    = overlay.getContext('2d');
-    const current = document.getElementById('current');
-    const logEl   = document.getElementById('log');
-    const graph   = document.getElementById('graph');
-    const gctx    = graph.getContext('2d');
-    const debugEl = document.getElementById('debug');
-    const btnLog  = document.getElementById('btnLog');
-    const btnGraph= document.getElementById('btnGraph');
-    const btnDebug= document.getElementById('btnDebug');
-    const btnCSV  = document.getElementById('btnCSV');
+            // Load Tesseract worker
+            const worker = Tesseract.createWorker();
+            await worker.load();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+            await worker.setParameters({
+                tessedit_char_whitelist: '0123456789',
+                tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+            });
 
-    // 3. TESSERACT WORKER
-    const worker = Tesseract.createWorker({
-      logger: m => debug && console.log(m)
-    });
-    await worker.load();
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
-    await worker.setParameters({
-      tessedit_char_whitelist: '0123456789',
-      preserve_interword_spaces: '0'
-    });
+            // Set up canvas
+            canvas.width = processingResolution.width;
+            canvas.height = processingResolution.height;
+            const ctx = canvas.getContext('2d');
 
-    // 4. STATE & UI LOGIC
-    let showLog=true, debug=false;
-    const ZERO_MARGIN = 0.5, ZERO_COUNT = 10;
-    let zeroBuf = [], autoStarted=false;
-    let dataLog = [], lastWeight=0, lastChange=Date.now();
+            // Debug canvas context
+            const debugCtx = debugCanvas.getContext('2d');
 
-    btnLog.onclick   = ()=>toggle(true);
-    btnGraph.onclick = ()=>toggle(false);
-    btnDebug.onclick = ()=>{ debug = !debug; debugEl.style.display = debug?'block':'none'; };
-    btnCSV.onclick   = () => {
-      const csv = 'time,weight\n' + dataLog.map(d=>`${new Date(d.time).toISOString()},${d.weight}`).join('\n');
-      const blob = new Blob([csv],{type:'text/csv'}), url=URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href=url; a.download='espresso.csv'; a.click();
-      URL.revokeObjectURL(url);
-    };
+            // Graph canvas context
+            const graphCtx = graphCanvas.getContext('2d');
 
-    function toggle(l) {
-      showLog = l;
-      logEl.classList.toggle('active', l);
-      graph.classList.toggle('active', !l);
-      if (!l) drawGraph();
-    }
+            // Toggle debug mode
+            toggleDebugBtn.addEventListener('click', () => {
+                debugMode = !debugMode;
+                debugCanvas.style.display = debugMode ? 'block' : 'none';
+            });
 
-    function drawGraph() {
-      graph.width = innerWidth;
-      graph.height= innerHeight * 0.4;
-      gctx.clearRect(0,0,graph.width,graph.height);
-      const now = Date.now();
-      const recent = dataLog.filter(d=>now - d.time <= 60000);
-      if (recent.length < 2) return;
-      const t0 = recent[0].time, t1 = recent[recent.length-1].time;
-      const w0 = Math.min(...recent.map(d=>d.weight)), w1 = Math.max(...recent.map(d=>d.weight));
-      gctx.beginPath();
-      recent.forEach((d,i) => {
-        const x = ((d.time-t0)/(t1-t0)) * graph.width;
-        const y = graph.height - ((d.weight-w0)/(w1-w0)) * graph.height;
-        i ? gctx.lineTo(x,y) : gctx.moveTo(x,y);
-      });
-      gctx.strokeStyle='lime';
-      gctx.lineWidth=2;
-      gctx.stroke();
-    }
+            // Toggle log mode
+            toggleLogBtn.addEventListener('click', () => {
+                if (logMode === 'text') {
+                    logMode = 'graph';
+                    logText.style.display = 'none';
+                    graphCanvas.style.display = 'block';
+                    toggleLogBtn.textContent = 'Switch to Log';
+                } else {
+                    logMode = 'text';
+                    logText.style.display = 'block';
+                    graphCanvas.style.display = 'none';
+                    toggleLogBtn.textContent = 'Switch to Graph';
+                }
+            });
 
-    function logWeight(w) {
-      const now=Date.now();
-      if (dataLog.length) {
-        const dt = (now-dataLog[dataLog.length-1].time)/1000;
-        const dr = (w-dataLog[dataLog.length-1].weight)/dt;
-        logEl.innerText += `\n${w} g @ ${dr.toFixed(2)} g/s`;
-      } else {
-        logEl.innerText = `${w} g`;
-      }
-      dataLog.push({weight:w, time:now});
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+            // Export CSV
+            exportCsvBtn.addEventListener('click', () => {
+                if (loggedData.length === 0) return;
+                const csvContent = 'timestamp,weight\n' + loggedData.map(d => `${d.timestamp},${d.weight}`).join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'weight_log.csv';
+                a.click();
+                URL.revokeObjectURL(url);
+            });
 
-    // 5. BRIGHT-PIXEL ROI DETECTION + OCR LOOP
-    proc.width = video.videoWidth;
-    proc.height= video.videoHeight;
-    overlay.width  = innerWidth;
-    overlay.height = innerHeight;
+            // Preprocess image: grayscale and threshold
+            function preprocessImage() {
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                // Grayscale
+                for (let i = 0; i < data.length; i += 4) {
+                    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    data[i] = avg;
+                    data[i + 1] = avg;
+                    data[i + 2] = avg;
+                }
+                // Threshold (simple fixed threshold)
+                const threshold = 128;
+                for (let i = 0; i < data.length; i += 4) {
+                    const val = data[i] > threshold ? 255 : 0;
+                    data[i] = val;
+                    data[i + 1] = val;
+                    data[i + 2] = val;
+                }
+                ctx.putImageData(imageData, 0, 0);
+            }
 
-    setInterval(async ()=> {
-      if (video.readyState < 2) return;
+            // Recognize digits
+            async function recognizeDigits() {
+                const now = Date.now();
+                let imageToRecognize = canvas;
+                if (bbox && now - lastDetectionTime < detectionInterval) {
+                    // Crop to bounding box
+                    const croppedCanvas = document.createElement('canvas');
+                    croppedCanvas.width = bbox.width;
+                    croppedCanvas.height = bbox.height;
+                    const croppedCtx = croppedCanvas.getContext('2d');
+                    croppedCtx.drawImage(canvas, bbox.x, bbox.y, bbox.width, bbox.height, 0, 0, bbox.width, bbox.height);
+                    imageToRecognize = croppedCanvas;
+                } else {
+                    // Redetect bounding box
+                    lastDetectionTime = now;
+                }
+                preprocessImage();
+                if (debugMode) {
+                    debugCtx.drawImage(imageToRecognize, 0, 0, debugCanvas.width, debugCanvas.height);
+                }
+                const { data } = await worker.recognize(imageToRecognize);
+                const text = data.text.trim();
+                if (text && /^\d+$/.test(text)) {
+                    if (!bbox || now - lastDetectionTime >= detectionInterval) {
+                        // Update bounding box
+                        const words = data.words.filter(w => /^\d+$/.test(w.text));
+                        if (words.length > 0) {
+                            const xMin = Math.min(...words.map(w => w.bbox.x0));
+                            const yMin = Math.min(...words.map(w => w.bbox.y0));
+                            const xMax = Math.max(...words.map(w => w.bbox.x1));
+                            const yMax = Math.max(...words.map(w => w.bbox.y1));
+                            bbox = { x: xMin, y: yMin, width: xMax - xMin, height: yMax - yMin };
+                        }
+                    }
+                    return parseInt(text, 10);
+                }
+                return null;
+            }
 
-      // draw current frame
-      pctx.drawImage(video, 0, 0, proc.width, proc.height);
-      const img = pctx.getImageData(0,0,proc.width,proc.height);
-      const data = img.data;
+            // Update UI
+            function updateUI(weight) {
+                if (weight !== null) {
+                    readingDiv.textContent = weight + ' g';
+                    if (bbox) {
+                        const videoRect = video.getBoundingClientRect();
+                        const scaleX = videoRect.width / canvas.width;
+                        const scaleY = videoRect.height / canvas.height;
+                        boundingBox.style.left = (bbox.x * scaleX) + 'px';
+                        boundingBox.style.top = (bbox.y * scaleY) + 'px';
+                        boundingBox.style.width = (bbox.width * scaleX) + 'px';
+                        boundingBox.style.height = (bbox.height * scaleY) + 'px';
+                        boundingBox.style.display = 'block';
+                    }
+                } else {
+                    readingDiv.textContent = '';
+                    boundingBox.style.display = 'none';
+                }
+            }
 
-      // find bounding box of bright pixels
-      let minX=proc.width, minY=proc.height, maxX=0, maxY=0;
-      const T = 200; // brightness threshold
-      for (let i=0; i<data.length; i+=4) {
-        const brightness = (data[i]+data[i+1]+data[i+2]) / 3;
-        if (brightness > T) {
-          const idx = i/4;
-          const x = idx % proc.width, y = Math.floor(idx / proc.width);
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-      // add small margin
-      const M = 8;
-      minX = Math.max(0, minX-M);
-      minY = Math.max(0, minY-M);
-      maxX = Math.min(proc.width, maxX+M);
-      maxY = Math.min(proc.height, maxY+M);
+            // Logging logic
+            function logWeight(weight) {
+                const now = Date.now();
+                if (weight === 0) {
+                    if (zeroStartTime === null) {
+                        zeroStartTime = now;
+                    } else if (now - zeroStartTime >= 3000) {
+                        logging = true;
+                        lastWeight = null;
+                        loggedData = [];
+                        logText.textContent = '';
+                    }
+                } else {
+                    zeroStartTime = null;
+                }
+                if (logging && weight > (lastWeight || 0)) {
+                    const timestamp = now;
+                    loggedData.push({ timestamp, weight });
+                    const rate = lastWeight !== null ? ((weight - lastWeight) / ((timestamp - loggedData[loggedData.length - 2].timestamp) / 1000)).toFixed(2) : 'N/A';
+                    logText.textContent += `${new Date(timestamp).toISOString()}: ${weight} g, rate: ${rate} g/s\n`;
+                    lastWeight = weight;
+                }
+            }
 
-      // clear overlay
-      octx.clearRect(0,0,overlay.width,overlay.height);
-      // draw ROI on overlay
-      const scaleX = overlay.width / proc.width;
-      const scaleY = overlay.height/ proc.height;
-      octx.strokeStyle = 'cyan';
-      octx.lineWidth = 3;
-      octx.strokeRect(minX*scaleX, minY*scaleY,
-                      (maxX-minX)*scaleX, (maxY-minY)*scaleY);
+            // Draw graph
+            function drawGraph() {
+                if (loggedData.length < 2) return;
+                const now = Date.now();
+                const recentData = loggedData.filter(d => now - d.timestamp <= 60000);
+                if (recentData.length < 2) return;
+                const minTime = recentData[0].timestamp;
+                const maxTime = recentData[recentData.length - 1].timestamp;
+                const minWeight = Math.min(...recentData.map(d => d.weight));
+                const maxWeight = Math.max(...recentData.map(d => d.weight));
+                const timeRange = maxTime - minTime;
+                const weightRange = maxWeight - minWeight || 1; // Avoid division by zero
+                graphCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
+                graphCtx.beginPath();
+                graphCtx.moveTo(0, graphCanvas.height);
+                recentData.forEach((d, i) => {
+                    const x = ((d.timestamp - minTime) / timeRange) * graphCanvas.width;
+                    const y = graphCanvas.height - ((d.weight - minWeight) / weightRange) * graphCanvas.height;
+                    graphCtx.lineTo(x, y);
+                });
+                graphCtx.strokeStyle = 'blue';
+                graphCtx.lineWidth = 2;
+                graphCtx.stroke();
+            }
 
-      // crop ROI into temp canvas
-      const w = maxX-minX, h = maxY-minY;
-      if (w < 20 || h < 20) return;  // too small
-      const crop = document.createElement('canvas');
-      crop.width = w; crop.height = h;
-      const cctx = crop.getContext('2d');
-      cctx.putImageData(pctx.getImageData(minX, minY, w, h), 0, 0);
+            // Main loop
+            async function processFrame() {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const weight = await recognizeDigits();
+                updateUI(weight);
+                if (weight !== null) {
+                    logWeight(weight);
+                    if (logMode === 'graph') {
+                        drawGraph();
+                    }
+                }
+                requestAnimationFrame(processFrame);
+            }
 
-      // OCR the crop
-      const { data: { text } } = await worker.recognize(crop);
-      const digits = text.replace(/[^0-9]/g,'');
-      const weight = digits.length ? parseInt(digits,10) : 0;
-
-      // display live
-      current.textContent = weight + ' g';
-
-      // auto-start logic
-      const now = Date.now();
-      if (!autoStarted) {
-        if (weight <= ZERO_MARGIN) zeroBuf.push(now);
-        else if (zeroBuf.length >= ZERO_COUNT) {
-          autoStarted = true;
-          dataLog = [];
-          logEl.innerText = '[Auto-start]';
-          lastChange = now;
-          logWeight(weight);
-        }
-        if (zeroBuf.length > ZERO_COUNT) zeroBuf.shift();
-      } else {
-        logWeight(weight);
-        if (Math.abs(weight - lastWeight) > 0.5) lastChange = now;
-        if (now - lastChange > 10000) {
-          autoStarted = false;
-          zeroBuf = [];
-          logEl.innerText += '\n[Reset]';
-        }
-      }
-      lastWeight = weight;
-
-      // update log scroll
-      if (showLog) logEl.scrollTop = logEl.scrollHeight;
-
-    }, 300);
-
-  })();
-  </script>
+            // Start processing
+            video.addEventListener('loadedmetadata', () => {
+                statusDiv.style.display = 'none';
+                processFrame();
+            });
+        })();
+    </script>
 </body>
 </html>
