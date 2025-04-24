@@ -27,7 +27,7 @@
       left: 0;
       width: 100%;
       height: 100%;
-      backdrop-filter: brightness(0.8); /* Blur removed */
+      backdrop-filter: brightness(0.8);
       pointer-events: none;
     }
     .ui {
@@ -139,6 +139,11 @@
 
     function togglePreprocess() {
       preprocess = !preprocess;
+      if (preprocess) {
+        debugEl.innerText = 'Preprocessing: Enabled';
+      } else {
+        debugEl.innerText = 'Preprocessing: Disabled';
+      }
     }
 
     function logWeight(weight) {
@@ -228,30 +233,3 @@
 
         if (!isNaN(weight)) {
           if (!autoStarted) {
-            if (weight <= zeroWeightMargin) {
-              zeroStreak.push(Date.now());
-              if (zeroStreak.length > zeroThreshold) {
-                zeroStreak.shift();
-              }
-            } else if (zeroStreak.length >= zeroThreshold) {
-              autoStarted = true;
-              dataLog = [];
-              logEl.innerText += `\n--- Auto Start ---`;
-              logWeight(weight);
-            }
-          } else {
-            logWeight(weight);
-          }
-        }
-
-      } catch (e) {
-        console.error('OCR Error:', e);
-      }
-      ocrInProgress = false;
-    }
-
-    setInterval(captureAndRead, 300);
-    startCamera();
-  </script>
-</body>
-</html>
